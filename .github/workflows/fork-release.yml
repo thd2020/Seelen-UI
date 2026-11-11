@@ -1,0 +1,73 @@
+# Fork only: builds the x64 installer from the `thd` branch and publishes it as the latest
+# release of this fork, signed with this fork's updater key. Installed fork builds update from
+# here (src/background/utils/updater.rs), never from upstream.
+name: Fork release
+
+on:
+  push:
+    branches: [thd]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: windows-2025
+    env:
+      TARGET: x86_64-pc-windows-msvc
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup
+        with:
+          rust-targets: x86_64-pc-windows-msvc
+          cache-key-prefix: fork-release-x64
+
+      # Upstream's version plus a build number, so every fork build is newer than the last one
+      # and the installed copy updates itself.
+      - name: Set version
+        id: version
+        shell: pwsh
+        run: |
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          $version = "$($pkg.version)-thd.${{ github.run_number }}"
+          $text = Get-Content package.json -Raw
+          $text = ([regex]'"version": "[^"]+"').Replace($text, "`"version`": `"$version`"", 1)
+          [IO.File]::WriteAllText("$PWD/package.json", $text)
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build hook DLL
+        run: cargo build --release --target ${{ env.TARGET }} -p sluhk
+
+      - name: Build installer
+        run: npx tauri build --ci --target ${{ env.TARGET }} --bundles nsis
+
+      - name: Publish release
+        id: release
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $nsis = "target/${{ env.TARGET }}/release/bundle/nsis"
+          $files = Get-ChildItem $nsis -File | ForEach-Object { $_.FullName }
+          gh release create "v$version" @files --repo "${{ github.repository }}" `
+            --target "${{ github.sha }}" --title "Seelen UI v$version" `
+            --notes "Fork build of ${{ github.sha }}." --latest
+          $id = gh api "repos/${{ github.repository }}/releases/tags/v$version" --jq .id
+          "id=$id" >> $env:GITHUB_OUTPUT
+
+      - uses: ./.github/actions/generate-update-manifest
+        with:
+          release-id: ${{ steps.release.outputs.id }}
+          version: ${{ steps.version.outputs.version }}
+          github-token: ${{ github.token }}
