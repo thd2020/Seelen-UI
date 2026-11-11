@@ -17,7 +17,8 @@ rustc-ice-*.txt
 .codegraph
 CLAUDE.md
 GEMINI.md
-.claudeWORKLOG.md
+.claude
+WORKLOG.md
 .cursor/rules/
 .worklog-push/
 *.pfx
