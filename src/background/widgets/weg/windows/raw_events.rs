@@ -6,7 +6,7 @@ use windows::Win32::{
 };
 
 use crate::{
-    error::Result, pcstr, platform::window::Window, widgets::weg::SeelenWeg,
+    error::Result, pcstr, platform::window::Window, state::FULL_STATE, widgets::weg::SeelenWeg,
     windows_api::WindowsApi,
 };
 
@@ -19,8 +19,14 @@ impl SeelenWeg {
         match event {
             EVENT_OBJECT_UNCLOAKED => {
                 let class = origin.class();
-                // this will hide native notification center and notifications preview
+                // this will hide native notification center and notifications preview,
+                // unless the user left notifications to Windows
                 if class == "Windows.UI.Core.CoreWindow"
+                    && FULL_STATE
+                        .load()
+                        .settings
+                        .by_widget
+                        .seelen_shows_notifications()
                     && origin
                         .exe_path()
                         .is_ok_and(|path| path.ends_with("ShellExperienceHost.exe"))

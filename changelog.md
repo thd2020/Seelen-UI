@@ -4,8 +4,8 @@
 
 ### enhancements
 
-- dock badges show the number of the app's notifications in the notification center first, including Windows 10 tray
-  balloons and apps that notify under another app id, matched by app name.
+- turning off notification popups in the flyouts now leaves notifications to Windows: its banners and notification
+  center show while the dock is on.
 
 ## [2.8.10]
 

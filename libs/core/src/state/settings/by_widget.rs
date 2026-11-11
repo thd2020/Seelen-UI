@@ -84,6 +84,20 @@ impl SettingsByWidget {
         }
     }
 
+    /// Whether Seelen shows notifications itself. It does unless the flyouts widget is disabled
+    /// or its notification popups are turned off; then Windows' own banners and notification
+    /// center are left to work as usual.
+    pub fn seelen_shows_notifications(&self) -> bool {
+        let flyouts = WidgetId::from("@seelen/flyouts");
+        self.is_enabled(&flyouts)
+            && self
+                .others
+                .get(&flyouts)
+                .and_then(|settings| settings.rest.get("showNotifications"))
+                .and_then(|value| value.0.as_bool())
+                .unwrap_or(true)
+    }
+
     /// System widgets can not be disabled. If a system widget is present in `others`
     /// (e.g. leftover from an older config), force it back to enabled; otherwise do nothing.
     pub fn sanitize(&mut self) {
