@@ -2,6 +2,11 @@
 
 ## [2.8.11-dev]
 
+### enhancements
+
+- turning off notification popups in the flyouts now leaves notifications to Windows: its banners and notification
+  center show while the dock is on.
+
 ## [2.8.10]
 
 ### enhancements
