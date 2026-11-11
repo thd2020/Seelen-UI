@@ -1,0 +1,99 @@
+{
+  "weixin.exe": {
+    "icon": "weixin.svg",
+    "tooltips": [
+      "Weixin",
+      "WeChat",
+      "微信"
+    ],
+    "item": "tray-weixin"
+  },
+  "wxwork.exe": {
+    "icon": "wecom.svg",
+    "tooltips": [
+      "WeCom",
+      "企业微信"
+    ],
+    "item": "tray-wecom"
+  },
+  "qq.exe": {
+    "icon": "qq.svg",
+    "tooltips": [
+      "QQ"
+    ],
+    "item": "tray-qq"
+  },
+  "claude.exe": {
+    "icon": "claude.svg",
+    "tooltips": [
+      "Claude"
+    ],
+    "item": "tray-claude"
+  },
+  "chatgpt.exe": {
+    "icon": "chatgpt.svg",
+    "tooltips": [
+      "ChatGPT"
+    ],
+    "item": "tray-chatgpt"
+  },
+  "onedrive.exe": {
+    "icon": "onedrive.svg",
+    "tooltips": [
+      "OneDrive"
+    ],
+    "item": "tray-onedrive"
+  },
+  "everything.exe": {
+    "icon": "everything.svg",
+    "tooltips": [
+      "Everything"
+    ],
+    "item": "tray-everything"
+  },
+  "powertoys.exe": {
+    "icon": "powertoys.svg",
+    "tooltips": [
+      "PowerToys"
+    ],
+    "item": "tray-powertoys"
+  },
+  "lghub_system_tray.exe": {
+    "icon": "logitech.svg",
+    "tooltips": [
+      "Logitech G HUB",
+      "LGHUB"
+    ],
+    "item": "tray-logitech"
+  },
+  "flclash.exe": {
+    "icon": "flclash.svg",
+    "tooltips": [
+      "FlClash"
+    ],
+    "item": "tray-flclash"
+  },
+  "nacccontrol.exe": {
+    "icon": "nacc.svg",
+    "tooltips": [
+      "NACC"
+    ],
+    "item": "tray-nacc"
+  },
+  "securityhealthsystray.exe": {
+    "icon": "security.svg",
+    "tooltips": [
+      "Windows Security",
+      "Windows 安全中心"
+    ],
+    "item": "tray-security"
+  },
+  "phevere.exe": {
+    "icon": "phevere.svg",
+    "tooltips": [
+      "phevere",
+      "Phevere"
+    ],
+    "item": "tray-phevere"
+  }
+}

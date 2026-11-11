@@ -4,7 +4,7 @@
 param(
     [string]$ThemeIcons = "$env:APPDATA\com.seelen.seelen-ui\themes\glass-bars\tray-icons",
     # Apps whose notifications keep their own logo (program file names as in apps.json).
-    [string[]]$KeepOwnLogo = @('phevere.exe'),
+    [string[]]$KeepOwnLogo = @(),
     [string]$Chrome = "$env:ProgramFiles\Google\Chrome\Application\chrome.exe"
 )
 $ErrorActionPreference = 'Stop'
