@@ -14,6 +14,10 @@ This is my build of [Seelen UI](https://github.com/eythaann/Seelen-UI) with fixe
 - The updater reads this fork's latest release instead of upstream's, so upstream releases never replace this build.
 - `.github/workflows/fork-release.yml` builds the x64 installer on every push to `thd` and publishes it as the latest release, versioned as upstream's version plus `-thd.<run number>`. Installed copies update from there.
 
+## Extras
+
+- `extras/notification-center/` restyles Windows' own notification center as a compact card under the top bar, for use with notifications left to Windows. See its README.
+
 ## Taking in upstream changes
 
 ```bash
