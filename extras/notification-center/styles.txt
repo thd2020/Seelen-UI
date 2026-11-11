@@ -1,0 +1,92 @@
+#! Card: 380 x 560 in the window's top-left corner; CenterPlacer shrinks the window to it.
+ActionCenter.ActionCenterPage > Grid#RootGrid
+  Width=380
+  Height=560
+  HorizontalAlignment=Left
+  VerticalAlignment=Top
+ActionCenter.ActionCenterPage
+  Background=Transparent
+Grid#ActionCenterBackground
+  CornerRadius=12
+  BorderThickness=1
+  BorderBrush=#99FFFFFF
+  Background:=<AcrylicBrush TintColor="#FFF4F4F6" TintOpacity="0.62" BackgroundSource="HostBackdrop" FallbackColor="#F5F4F4F6" />
+Image#DropShadow
+  Visibility=Collapsed
+Grid#NotificationCenterBackground
+  Background=Transparent
+  Height=560
+  VerticalAlignment=Top
+#! No quick-action tiles: Seelen's own quick settings replace them.
+Grid#ControlCenterBackground
+  Visibility=Collapsed
+#! Android-style groups: the app header is the top strip of the group's card.
+ActionCenter.GroupView > Grid#GroupGrid
+  Background=#CCFFFFFF
+  CornerRadius=14,14,4,4
+  BorderThickness=1
+  BorderBrush=#14000000
+  Padding=10,0,2,0
+  Margin=0,10,0,0
+  Height=30
+ActionCenter.GroupTitleView#GroupTitle
+  HorizontalAlignment=Left
+ActionCenter.GroupTitleView > Grid#GroupTitleGrid > Border#Border > TextBlock#Title
+  FontSize=12
+  FontWeight=SemiBold
+  Foreground=#8A000000
+Border#ItemOpaquePlating
+  Background=#CCFFFFFF
+  CornerRadius=4,4,14,14
+  BorderThickness=1
+  BorderBrush=#14000000
+Border#RevealBackground
+  CornerRadius=4,4,14,14
+ActionCenter.ItemView > Grid#MainGrid
+  Margin=0,2,0,0
+TextBlock#Attribution
+  Foreground=#80000000
+  FontSize=11
+ActionCenter.NotificationListViewHeaderItem
+  MinHeight=0
+  Padding=0
+  Margin=0
+ActionCenter.GroupView
+  VerticalAlignment=Bottom
+  Margin=0
+#! Text buttons as pill chips: manage, collapse, clear all.
+Button#ManageNotificationSettingsButton > Grid > Border#Border
+  Background=#B3FFFFFF
+  CornerRadius=14
+  BorderThickness=1
+  BorderBrush=#14000000
+  Padding=10,0,10,0
+ActionCenter.ClearAllButton#ClearAllButtonControl > Button#ClearAll > Grid > Border#Border
+  Background=#B3FFFFFF
+  CornerRadius=14
+  BorderThickness=1
+  BorderBrush=#14000000
+  Padding=10,0,10,0
+ControlCenter.ExpandCollapseButton#ExpandCollapseButtonControl > Button > Grid > Border#Border
+  Background=#B3FFFFFF
+  CornerRadius=14
+  BorderThickness=1
+  BorderBrush=#14000000
+  Padding=10,0,10,0
+#! Banners: the same frosted card, grey app strip and pill action buttons.
+Border#ToastBorder
+  CornerRadius=14
+  BorderThickness=1
+  BorderBrush=#99FFFFFF
+  Background:=<AcrylicBrush TintColor="#FFF4F4F6" TintOpacity="0.62" BackgroundSource="HostBackdrop" FallbackColor="#F5F4F4F6" />
+Border#ToastRevealBorder
+  CornerRadius=14
+TextBlock#SenderName
+  FontSize=12
+  FontWeight=SemiBold
+  Foreground=#8A000000
+Button#VerbButton > ContentPresenter#ContentPresenter
+  CornerRadius=14
+  Background=#CCFFFFFF
+  BorderThickness=1
+  BorderBrush=#14000000
