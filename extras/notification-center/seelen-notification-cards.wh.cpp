@@ -1,12 +1,12 @@
 // ==WindhawkMod==
 // @id              seelen-notification-cards
 // @name            Seelen notification cards
-// @description     One card per notification in Windows 10's notification center, each with its app's icon and name; theme icons for known apps
+// @description     Windows 10's notification center as a compact card under the top bar: one card per notification with its app's icon and name, theme icons for known apps
 // @version         1.0
 // @author          thd2020
 // @include         ShellExperienceHost.exe
 // @architecture    x86-64
-// @compilerOptions -lole32 -loleaut32 -lruntimeobject
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -lgdi32 -lcomctl32
 // ==/WindhawkMod==
 
 // Windows 10 groups the notification center by app: one header row (app logo on an accent plate
@@ -25,11 +25,13 @@
 // unexpected skips that card instead of taking down the host.
 
 #include <windows.h>
+#include <commctrl.h>
 #undef GetCurrentTime
 #include <string>
 #include <unordered_map>
 #include <vector>
 #include <sstream>
+#include <cmath>
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
@@ -45,7 +47,8 @@ using namespace winrt::Windows::UI::Xaml;
 namespace wf = winrt::Windows::Foundation;
 
 static const wchar_t kHeaderTag[] = L"seelen-card-header";
-static std::unordered_map<std::wstring, std::wstring> g_iconByName;  // lowercase app name -> file
+static std::unordered_map<std::wstring, std::wstring> g_iconByName;
+static std::wstring g_closedFile;  // LocalState\\seelen-icons\\closed.txt  // lowercase app name -> file
 
 static std::wstring Lower(std::wstring s) {
     for (auto& c : s) c = (wchar_t)towlower(c);
@@ -55,6 +58,7 @@ static std::wstring Lower(std::wstring s) {
 static void LoadIconMap() {
     if (!g_iconByName.empty()) return;
     try {
+        g_closedFile = std::wstring(winrt::Windows::Storage::ApplicationData::Current().LocalFolder().Path().c_str()) + L"\\seelen-icons\\closed.txt";
         std::wstring path = std::wstring(winrt::Windows::Storage::ApplicationData::Current().LocalFolder().Path().c_str()) +
                             L"\\seelen-icons\\map.txt";
         HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
@@ -113,19 +117,87 @@ static Controls::ListViewBase FindListAncestor(DependencyObject o) {
     return nullptr;
 }
 
+
+// ---- placement of the center's window ----
+static const int kCardWidth = 380, kCardHeight = 560, kGap = 8, kRadius = 12;
+
+// The window shape for a card with rounded corners of radius r. Window regions have no
+// anti-aliasing, so each corner keeps only the pixels the card's rounded corner fully covers.
+static HRGN CardRegion(int w, int h, int r) {
+    HRGN rgn = CreateRectRgn(0, 0, w, h);
+    for (int row = 0; row < r; row++) {
+        double dy = r - row;
+        double inside = sqrt(r * r - dy * dy > 0 ? r * r - dy * dy : 0);
+        int cut = (int)ceil(r - inside);
+        if (cut <= 0) continue;
+        for (int yy : {row, h - 1 - row}) {
+            HRGN left = CreateRectRgn(0, yy, cut, yy + 1), right = CreateRectRgn(w - cut, yy, w, yy + 1);
+            CombineRgn(rgn, rgn, left, RGN_DIFF);
+            CombineRgn(rgn, rgn, right, RGN_DIFF);
+            DeleteObject(left);
+            DeleteObject(right);
+        }
+    }
+    return rgn;
+}
+
+static bool IsCoreWindow(HWND h) {
+    wchar_t cls[64] = L"";
+    GetClassName(h, cls, 64);
+    return wcscmp(cls, L"Windows.UI.Core.CoreWindow") == 0;
+}
+
+using SetWindowPos_t = BOOL(WINAPI*)(HWND, HWND, int, int, int, int, UINT);
+static SetWindowPos_t SetWindowPos_Original;
+static BOOL WINAPI SetWindowPos_Hook(HWND h, HWND after, int x, int y, int cx, int cy, UINT flags) {
+    if (!(flags & SWP_NOSIZE) && cy > 0 && IsCoreWindow(h)) {
+        MONITORINFO mi{sizeof(mi)};
+        if (GetMonitorInfo(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mi)) {
+            int monitorHeight = mi.rcMonitor.bottom - mi.rcMonitor.top;
+            if (cy >= monitorHeight * 6 / 10) {
+                // The center opening at full height: make it the card, under the top bar.
+                int cardX = mi.rcWork.right - kGap - kCardWidth, cardY = mi.rcWork.top + kGap;
+                BOOL ok = SetWindowPos_Original(h, after, cardX, cardY, cx == 0 ? 0 : kCardWidth, kCardHeight, flags & ~SWP_NOMOVE);
+                if (cx != 0) SetWindowRgn(h, CardRegion(kCardWidth, kCardHeight, kRadius), TRUE);
+                return ok;
+            }
+        }
+    }
+    return SetWindowPos_Original(h, after, x, y, cx, cy, flags);
+}
+
 // Adds or updates the icon-and-name row at the top of one notification card.
+static bool IsShown(FrameworkElement const& fe) {
+    return fe && fe.Visibility() == Visibility::Visible;
+}
+
+// A conversation header: the item has a title but no message and no time.
+static bool IsConversationHeader(DependencyObject const& item) {
+    auto content = FindNamed(item, L"Content");
+    auto attribution = FindNamed(item, L"Attribution");
+    return FindNamed(item, L"Title") && !IsShown(content) && !IsShown(attribution);
+}
+
 static void PatchCard(DependencyObject const& item) {
+    auto container = item.try_as<UIElement>();
+    if (!container) return;
+    // Containers are recycled, so set visibility both ways every time.
+    bool header = IsConversationHeader(item);
+    auto wanted = header ? Visibility::Collapsed : Visibility::Visible;
+    if (container.Visibility() != wanted) container.Visibility(wanted);
+    if (header) return;
+
     auto list = FindListAncestor(Media::VisualTreeHelper::GetParent(item));
     if (!list) return;
-    auto container = item.try_as<Controls::Primitives::SelectorItem>();
-    if (!container) return;
-    auto header = list.GroupHeaderContainerFromItemContainer(container);
-    if (!header) return;
+    auto selector = item.try_as<Controls::Primitives::SelectorItem>();
+    if (!selector) return;
+    auto groupHeader = list.GroupHeaderContainerFromItemContainer(selector);
+    if (!groupHeader) return;
 
     std::wstring appName;
     Media::ImageSource logo{nullptr};
-    if (auto title = FindNamed(header, L"Title").try_as<Controls::TextBlock>()) appName = title.Text().c_str();
-    if (auto image = FindNamed(header, L"StandardImage").try_as<Controls::Image>()) logo = image.Source();
+    if (auto title = FindNamed(groupHeader, L"Title").try_as<Controls::TextBlock>()) appName = title.Text().c_str();
+    if (auto image = FindNamed(groupHeader, L"StandardImage").try_as<Controls::Image>()) logo = image.Source();
     if (appName.empty()) return;
 
     auto panel = FindNamed(item, L"TextContentPanel").try_as<Controls::StackPanel>();
@@ -202,6 +274,26 @@ static void Walk(DependencyObject const& o, int depth) {
     for (int i = 0; i < n; i++) Walk(Media::VisualTreeHelper::GetChild(o, i), depth + 1);
 }
 
+
+static void WriteClosedTime() {
+    if (g_closedFile.empty()) return;
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    ULONGLONG ms = ((((ULONGLONG)ft.dwHighDateTime) << 32) | ft.dwLowDateTime) / 10000ULL - 11644473600000ULL;
+    std::string text = std::to_string(ms);
+    HANDLE f = CreateFileW(g_closedFile.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, 0, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return;
+    DWORD w;
+    WriteFile(f, text.data(), (DWORD)text.size(), &w, nullptr);
+    CloseHandle(f);
+}
+
+static LRESULT CALLBACK NoteDeactivation(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
+    if (msg == WM_ACTIVATE && LOWORD(wp) == WA_INACTIVE) WriteClosedTime();
+    if (msg == WM_NCDESTROY) RemoveWindowSubclass(h, NoteDeactivation, 1);
+    return DefSubclassProc(h, msg, wp, lp);
+}
+
 struct ThreadState {
     DispatcherTimer timer{nullptr};
 };
@@ -224,11 +316,21 @@ static void WINAPI StartOnThisThread(PVOID) {
             }
         });
         t_state->timer.Start();
+
+        // The center closes when it loses focus. Note the time, so the top-bar bell can tell "the
+        // click that just closed it" from "open it" (CenterPlacer reads this file for the bell).
+        EnumThreadWindows(GetCurrentThreadId(), [](HWND h, LPARAM) -> BOOL {
+            wchar_t cls[64] = L"";
+            GetClassName(h, cls, 64);
+            if (wcscmp(cls, L"Windows.UI.Core.CoreWindow") == 0) SetWindowSubclass(h, NoteDeactivation, 1, 0);
+            return TRUE;
+        }, 0);
     } catch (...) {
     }
 }
 
 static void WINAPI StopOnThisThread(PVOID) {
+    EnumThreadWindows(GetCurrentThreadId(), [](HWND h, LPARAM) -> BOOL { RemoveWindowSubclass(h, NoteDeactivation, 1); return TRUE; }, 0);
     try {
         if (!t_state) return;
         t_state->timer.Stop();
@@ -291,7 +393,11 @@ static DWORD WINAPI StartLater(LPVOID) {
     return 0;
 }
 
-BOOL Wh_ModInit() { return TRUE; }
+BOOL Wh_ModInit() {
+    if (HMODULE user32 = GetModuleHandleW(L"user32.dll"))
+        Wh_SetFunctionHook((void*)GetProcAddress(user32, "SetWindowPos"), (void*)SetWindowPos_Hook, (void**)&SetWindowPos_Original);
+    return TRUE;
+}
 
 void Wh_ModAfterInit() {
     CloseHandle(CreateThread(nullptr, 0, StartLater, nullptr, 0, nullptr));

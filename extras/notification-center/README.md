@@ -6,9 +6,9 @@ With Seelen's notification popups turned off, this fork leaves notifications to 
 
 - `styles.txt`: the styles for the Windhawk mod [Windows 11 Notification Center Styler](https://windhawk.net/mods/windows-11-notification-center-styler) (version 1.8), which also loads into Windows 10's center. A line starting at the left margin names the element, the indented lines below it are its styles, and lines starting with `#!` are comments. The element names come from Windows 10 21H2's `ShellExperienceHost` (`ActionCenter.ActionCenterPage`, `ActionCenter.ItemView`, `ActionCenter.ToastView` and so on). The center's content is laid out as a 380 × 560 card in the window's top-left corner.
 - `apply-styles.ps1`: writes `styles.txt` into the mod's settings in a portable Windhawk (it expects to sit in a folder inside the Windhawk folder) and restarts Windows' notification host so they apply.
-- `seelen-notification-cards.wh.cpp`: a small Windhawk mod. Windows 10's center only names the app on a per-app header row; this mod adds an icon-and-name row to every card (finding each card's app through the list's group headers, which the styles hide) and swaps in theme icons on cards and banners.
+- `seelen-notification-cards.wh.cpp`: a small Windhawk mod running inside the notification host. Windows 10's center only names the app on a per-app header row; the mod adds an icon-and-name row to every card (finding each card's app through the list's group headers, which the styles hide), swaps in theme icons on cards and banners, and hides conversation headers (apps such as Claude group notifications under a title row that would read as a duplicate card). It also places the center: when the host sizes the window to full height, the mod gives it the card's size and place under the top bar and its rounded shape, so it never appears full height. And it notes when the center loses focus, for the bell.
 - `install-icons.ps1`: renders the theme's SVG tray icons to PNG with headless Chrome and puts them, with a name-to-icon map built from the theme's `apps.json`, into the notification host's own `LocalState\seelen-icons` folder, the only place its sandbox can read.
-- `CenterPlacer.cs`: Windows draws these windows opaque, so the windows themselves have to take the card's shape. This small background program moves and shrinks the center's window to 380 × 560 at the top right of the work area, just below Seelen's top bar, and rounds it. It also moves each banner window there and cuts it to its card. Window shapes have no anti-aliasing, so the corners keep only pixels the card fully covers, which leaves no dark fringe. `W` and `H` must match the sizes in `styles.txt`.
+- `CenterPlacer.cs`: a small background program. Windows draws banners opaque in the bottom-right corner, so it moves each banner window under the top bar and cuts it to its rounded card (window shapes have no anti-aliasing, so the corners keep only pixels the card fully covers). Run with a `seelen-center:` link as its argument, it toggles the center for the top-bar bell: a click on the bell takes focus from an open center, which closes it just before the click arrives, so it opens the center only when the mod didn't note a close in the last 0.6 s. The card size in the mod, in this program and in `styles.txt` must match (380 × 560).
 
 ## Set up on a PC
 
@@ -17,4 +17,13 @@ With Seelen's notification popups turned off, this fork leaves notifications to 
 3. Build the placer with the C# compiler that ships with Windows: `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe -target:winexe -out:CenterPlacer.exe CenterPlacer.cs`.
 4. Start `windhawk.exe -tray-only` and `CenterPlacer.exe` at sign-in, for example with shortcuts in the Startup folder.
 
-The top-bar bell should open Windows' center: an inline toolbar item with the `Notifications` scope and `onClick: open("ms-actioncenter:")`.
+The top-bar bell opens and closes Windows' center: an inline toolbar item with the `Notifications` scope, `badge: return count > 0 ? count : null` and `onClick: open("seelen-center:toggle")`. Register the link for your user once:
+
+```powershell
+$exe = "<folder>\CenterPlacer.exe"; $k = 'HKCU:\Software\Classes\seelen-center'
+New-Item "$k\shell\open\command" -Force | Out-Null
+Set-ItemProperty $k '(default)' 'URL:Seelen notification center'; Set-ItemProperty $k 'URL Protocol' ''
+Set-ItemProperty "$k\shell\open\command" '(default)' "`"$exe`" `"%1`""
+```
+
+Known limit: Windows 10 draws a faint one-pixel line just outside the center's left edge (part of the shell's own decoration for edge panels, outside the window and its XAML), which shows next to the rounded left corners.
