@@ -6,7 +6,7 @@
 using System; using System.Text; using System.Threading; using System.Runtime.InteropServices;
 static class CenterPlacer {
   const int W = 380, H = 560, Gap = 8, Radius = 12;
-  const int BannerSide = 16, BannerTop = 71, BannerBottom = 11;
+  const int BannerSide = 16, BannerTop = 71, BannerBottom = 11, BannerRadius = 14;
   static IntPtr lastBanner; static int lastBannerSize;
   delegate void WinEventProc(IntPtr hook, uint ev, IntPtr hwnd, int idObject, int idChild, uint thread, uint time);
   static WinEventProc proc;
@@ -45,13 +45,13 @@ static class CenterPlacer {
       if (bottomRight) SetWindowPos(hwnd, IntPtr.Zero, r.L, y - BannerTop, 0, 0, 0x15);
       if (lastBanner != hwnd || lastBannerSize != bw * 100000 + bh) {
         lastBanner = hwnd; lastBannerSize = bw * 100000 + bh;
-        SetWindowRgn(hwnd, CreateRoundRectRgn(BannerSide, BannerTop, bw - BannerSide + 1, bh - BannerBottom + 1, Radius * 2 + 4, Radius * 2 + 4), true);
+        SetWindowRgn(hwnd, CardRegion(BannerSide, BannerTop, bw - 2 * BannerSide, bh - BannerTop - BannerBottom, BannerRadius), true);
       }
       return;
     }
     if (placed) return;
     SetWindowPos(hwnd, IntPtr.Zero, x, y, W, H, 0x14);
-    SetWindowRgn(hwnd, CreateRoundRectRgn(0, 0, W + 1, H + 1, Radius * 2, Radius * 2), true);
+    SetWindowRgn(hwnd, CardRegion(0, 0, W, H, Radius), true);
   }
   // Bottom edge of Seelen's top bar on this monitor: a seelen-ui window spanning the monitor's
   // width at its top edge. Falls back to the monitor top when there is none.
@@ -75,6 +75,29 @@ static class CenterPlacer {
   delegate bool EnumProc(IntPtr h, IntPtr l);
   [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
   [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  // The window shape for a card with rounded corners of radius r. Window regions have no
+  // anti-aliasing, so each corner keeps only the pixels the card's rounded corner fully covers:
+  // the visible edge is then the card's own solid pixels, never the window's dark background.
+  // Built row by row, so all four corners are exact mirrors (CreateRoundRectRgn is off by one on
+  // two sides).
+  static IntPtr CardRegion(int x, int y, int w, int h, int r) {
+    IntPtr rgn = CreateRectRgn(x, y, x + w, y + h);
+    for (int row = 0; row < r; row++) {
+      double dy = r - row;                       // distance from the corner centre to the row's outer edge
+      double inside = Math.Sqrt(Math.Max(0, (double)r * r - dy * dy));
+      int cut = (int)Math.Ceiling(r - inside);   // pixels to drop at each end of the row
+      if (cut <= 0) continue;
+      foreach (int yy in new[] { y + row, y + h - 1 - row }) {
+        IntPtr left = CreateRectRgn(x, yy, x + cut, yy + 1), right = CreateRectRgn(x + w - cut, yy, x + w, yy + 1);
+        CombineRgn(rgn, rgn, left, 4 /* RGN_DIFF */); CombineRgn(rgn, rgn, right, 4);
+        DeleteObject(left); DeleteObject(right);
+      }
+    }
+    return rgn;
+  }
+  [DllImport("gdi32.dll")] static extern IntPtr CreateRectRgn(int a, int b, int c, int d);
+  [DllImport("gdi32.dll")] static extern int CombineRgn(IntPtr dst, IntPtr a, IntPtr b, int mode);
+  [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr o);
   static bool IsShellExperienceHost(uint pid) {
     return ProcessName(pid).EndsWith(@"\ShellExperienceHost.exe", StringComparison.OrdinalIgnoreCase);
   }
