@@ -17,6 +17,7 @@ This is my build of [Seelen UI](https://github.com/eythaann/Seelen-UI) with fixe
 ## Extras
 
 - `extras/notification-center/` restyles Windows' own notification center as a compact card under the top bar, for use with notifications left to Windows. See its README.
+- `extras/theme-glass-bars/` is the Seelen theme used with this fork, including the line-icon set for small icons.
 
 ## Taking in upstream changes
 
