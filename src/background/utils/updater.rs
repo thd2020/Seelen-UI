@@ -9,7 +9,7 @@ use crate::{
     state::FULL_STATE,
 };
 
-pub static SIGN_PUB_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ4QjU1RUI0NEM0NzBERUIKUldUckRVZE10RjYxU0lpaERvdklYL05DVlg0Sk9EVngvaEgzZjMvU1NNemJTZXZ1K0dNVXU3ZkQK";
+pub static SIGN_PUB_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk1Q0JDQzNDQjA2MkY0NTIKUldSUzlHS3dQTXpMbFNxLy8vQzZRc05MRjlVSG5IaTVVTFBhMGoyRnplaFJ4amkzYm5uMkdXRkUK";
 
 pub async fn check_for_updates() -> Result<Option<Update>> {
     if tauri::is_dev() || has_fixed_runtime() || is_running_as_appx() {
@@ -25,7 +25,7 @@ pub async fn check_for_updates() -> Result<Option<Update>> {
             .updater_builder()
             .pubkey(SIGN_PUB_KEY)
             .endpoints(vec![
-                "https://github.com/eythaann/Seelen-UI/releases/download/nightly/latest.json"
+                "https://github.com/thd2020/Seelen-UI/releases/latest/download/latest.json"
                     .try_into()
                     .expect("Failed to parse url"),
             ])?
@@ -39,7 +39,7 @@ pub async fn check_for_updates() -> Result<Option<Update>> {
             .updater_builder()
             .pubkey(SIGN_PUB_KEY)
             .endpoints(vec![
-                "https://github.com/eythaann/Seelen-UI/releases/latest/download/latest.json"
+                "https://github.com/thd2020/Seelen-UI/releases/latest/download/latest.json"
                     .try_into()
                     .expect("Failed to parse url"),
             ])?
