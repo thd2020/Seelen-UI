@@ -150,20 +150,22 @@ static bool IsCoreWindow(HWND h) {
 using SetWindowPos_t = BOOL(WINAPI*)(HWND, HWND, int, int, int, int, UINT);
 static SetWindowPos_t SetWindowPos_Original;
 static BOOL WINAPI SetWindowPos_Hook(HWND h, HWND after, int x, int y, int cx, int cy, UINT flags) {
-    if (!(flags & SWP_NOSIZE) && cy > 0 && IsCoreWindow(h)) {
+    BOOL ok = SetWindowPos_Original(h, after, x, y, cx, cy, flags);
+    if (!(flags & SWP_NOSIZE) && cx > 0 && cy > 0 && IsCoreWindow(h)) {
         MONITORINFO mi{sizeof(mi)};
         if (GetMonitorInfo(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mi)) {
             int monitorHeight = mi.rcMonitor.bottom - mi.rcMonitor.top;
             if (cy >= monitorHeight * 6 / 10) {
-                // The center opening at full height: make it the card, under the top bar.
-                int cardX = mi.rcWork.right - kGap - kCardWidth, cardY = mi.rcWork.top + kGap;
-                BOOL ok = SetWindowPos_Original(h, after, cardX, cardY, cx == 0 ? 0 : kCardWidth, kCardHeight, flags & ~SWP_NOMOVE);
-                if (cx != 0) SetWindowRgn(h, CardRegion(kCardWidth, kCardHeight, kRadius), TRUE);
-                return ok;
+                // The center, at the size the shell gives it (its open animation is built for that
+                // size, so it isn't changed). Its content is laid out as a card kGap in from the
+                // window's top-left corner (styler: RootGrid Margin), and the window is cut to it.
+                HRGN card = CardRegion(kCardWidth, kCardHeight, kRadius);
+                OffsetRgn(card, kGap, kGap);
+                SetWindowRgn(h, card, TRUE);
             }
         }
     }
-    return SetWindowPos_Original(h, after, x, y, cx, cy, flags);
+    return ok;
 }
 
 // Adds or updates the icon-and-name row at the top of one notification card.
