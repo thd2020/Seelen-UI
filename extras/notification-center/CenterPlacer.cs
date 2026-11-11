@@ -10,7 +10,23 @@ static class CenterPlacer {
   static IntPtr lastBanner; static int lastBannerSize;
   delegate void WinEventProc(IntPtr hook, uint ev, IntPtr hwnd, int idObject, int idChild, uint thread, uint time);
   static WinEventProc proc;
-  static void Main() {
+  // The top-bar bell opens "seelen-center:toggle", which runs this with that link as argument. A
+  // click on the bell takes focus from the open center, so Windows closes it just before the click
+  // arrives; reopening it then would make it impossible to close from the bell. The
+  // seelen-notification-cards mod writes the time the center last lost focus to closed.txt in the
+  // notification host's LocalState\seelen-icons, and the bell only opens the center when it didn't
+  // close a moment ago.
+  static void Main(string[] args) {
+    if (args.Length > 0 && (args[0] == "--toggle" || args[0].StartsWith("seelen-center:", StringComparison.OrdinalIgnoreCase))) {
+      long last = 0;
+      try {
+        string f = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+          @"Packages\Microsoft.Windows.ShellExperienceHost_cw5n1h2txyewy\LocalState\seelen-icons\closed.txt");
+        long.TryParse(System.IO.File.ReadAllText(f).Trim(), out last);
+      } catch { }
+      if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - last > 600) System.Diagnostics.Process.Start("explorer.exe", "ms-actioncenter:");
+      return;
+    }
     bool created; using (var m = new Mutex(true, @"Local\SeelenCenterPlacer", out created)) { if (!created) return;
       proc = OnEvent;
       // EVENT_OBJECT_SHOW 0x8002 .. EVENT_OBJECT_UNCLOAKED 0x8018 covers show, location change and uncloak.
