@@ -3,6 +3,8 @@
 # folder, the only place its sandbox can read. Needs Google Chrome for the SVG rendering.
 param(
     [string]$ThemeIcons = "$env:APPDATA\com.seelen.seelen-ui\themes\glass-bars\tray-icons",
+    # Apps whose notifications keep their own logo (program file names as in apps.json).
+    [string[]]$KeepOwnLogo = @('phevere.exe'),
     [string]$Chrome = "$env:ProgramFiles\Google\Chrome\Application\chrome.exe"
 )
 $ErrorActionPreference = 'Stop'
@@ -26,6 +28,7 @@ Remove-Item $work -Recurse -Force
 $apps = Get-Content (Join-Path $ThemeIcons 'apps.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $map = [ordered]@{}
 foreach ($p in $apps.PSObject.Properties) {
+    if ($KeepOwnLogo -contains $p.Name) { continue }
     $png = $p.Value.icon -replace '\.svg$', '.png'
     $map[[IO.Path]::GetFileNameWithoutExtension($p.Name)] = $png
     foreach ($t in $p.Value.tooltips) { $map[$t] = $png }

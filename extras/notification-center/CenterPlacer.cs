@@ -10,14 +10,20 @@ static class CenterPlacer {
   static IntPtr lastBanner; static int lastBannerSize;
   delegate void WinEventProc(IntPtr hook, uint ev, IntPtr hwnd, int idObject, int idChild, uint thread, uint time);
   static WinEventProc proc;
-  // The top-bar bell opens "seelen-center:toggle", which runs this with that link as argument. A
-  // click on the bell takes focus from the open center, so Windows closes it just before the click
-  // arrives; reopening it then would make it impossible to close from the bell. The
-  // seelen-notification-cards mod writes the time the center last lost focus to closed.txt in the
-  // notification host's LocalState\seelen-icons, and the bell only opens the center when it didn't
-  // close a moment ago.
+  // The top-bar bell opens "seelen-center:toggle", which runs this with that link as argument.
+  // Windows' own "open the notification center" never closes it, so the bell does that itself: an
+  // open center has focus, and Escape closes it. A click elsewhere can also close the center just
+  // before the bell's click arrives; the seelen-notification-cards mod writes the time the center
+  // last lost focus to closed.txt, and the bell doesn't reopen a center that closed a moment ago.
   static void Main(string[] args) {
     if (args.Length > 0 && (args[0] == "--toggle" || args[0].StartsWith("seelen-center:", StringComparison.OrdinalIgnoreCase))) {
+      IntPtr open = OpenCenter();
+      if (open != IntPtr.Zero) {
+        SetForegroundWindow(open);
+        keybd_event(0x1B, 0, 0, UIntPtr.Zero);        // Escape down
+        keybd_event(0x1B, 0, 2, UIntPtr.Zero);        // Escape up
+        return;
+      }
       long last = 0;
       try {
         string f = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -45,9 +51,8 @@ static class CenterPlacer {
     GetMonitorInfo(MonitorFromWindow(hwnd, 2), ref mi);
     int monH = mi.rcMonitor.B - mi.rcMonitor.T;
     int x = mi.rcWork.R - Gap - W, y = Math.Max(mi.rcWork.T, TopBarBottom(mi.rcMonitor)) + Gap;
-    // Windows' own full-height placement at the right edge, or a card this tool placed before.
-    bool isCenter = ((r.B - r.T) >= monH * 6 / 10 && r.R == mi.rcMonitor.R) || (r.R - r.L == W && r.B - r.T == H);
-    bool placed = r.L == x && r.T == y && r.R - r.L == W && r.B - r.T == H;
+    // The center is shaped by the seelen-notification-cards mod inside the host; only banners here.
+    bool isCenter = (r.B - r.T) >= monH * 6 / 10;
     if (!isCenter) {
       // Banners: Windows puts their window in the bottom-right corner, above where its taskbar
       // would be. The card sits BannerSide px in from the window's sides, BannerTop from its top and
@@ -65,9 +70,6 @@ static class CenterPlacer {
       }
       return;
     }
-    if (placed) return;
-    SetWindowPos(hwnd, IntPtr.Zero, x, y, W, H, 0x14);
-    SetWindowRgn(hwnd, CardRegion(0, 0, W, H, Radius), true);
   }
   // Bottom edge of Seelen's top bar on this monitor: a seelen-ui window spanning the monitor's
   // width at its top edge. Falls back to the monitor top when there is none.
@@ -114,6 +116,24 @@ static class CenterPlacer {
   [DllImport("gdi32.dll")] static extern IntPtr CreateRectRgn(int a, int b, int c, int d);
   [DllImport("gdi32.dll")] static extern int CombineRgn(IntPtr dst, IntPtr a, IntPtr b, int mode);
   [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr o);
+  // The open center: the notification host's tall window, shown and not cloaked.
+  static IntPtr OpenCenter() {
+    IntPtr h = IntPtr.Zero;
+    while ((h = FindWindowEx(IntPtr.Zero, h, "Windows.UI.Core.CoreWindow", null)) != IntPtr.Zero) {
+      uint pid; GetWindowThreadProcessId(h, out pid);
+      if (!IsShellExperienceHost(pid) || !IsWindowVisible(h)) continue;
+      int cloaked; DwmGetWindowAttribute(h, 14, out cloaked, 4);
+      RECT r; GetWindowRect(h, out r);
+      var mi = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
+      GetMonitorInfo(MonitorFromWindow(h, 2), ref mi);
+      if (cloaked == 0 && r.B - r.T >= (mi.rcMonitor.B - mi.rcMonitor.T) * 6 / 10) return h;
+    }
+    return IntPtr.Zero;
+  }
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindowEx(IntPtr p, IntPtr a, string c, string t);
+  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+  [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int a, out int v, int s);
   static bool IsShellExperienceHost(uint pid) {
     return ProcessName(pid).EndsWith(@"\ShellExperienceHost.exe", StringComparison.OrdinalIgnoreCase);
   }

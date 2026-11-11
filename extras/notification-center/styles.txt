@@ -1,9 +1,10 @@
-#! Card: 380 x 560 in the window's top-left corner; CenterPlacer shrinks the window to it.
+#! Card: 380 x 560, 8 px in from the window's top-left corner; the cards mod cuts the window to it.
 ActionCenter.ActionCenterPage > Grid#RootGrid
   Width=380
   Height=560
   HorizontalAlignment=Left
   VerticalAlignment=Top
+  Margin=8,8,0,0
 ActionCenter.ActionCenterPage
   Background=Transparent
 Grid#ActionCenterBackground
@@ -80,3 +81,15 @@ Button#VerbButton > ContentPresenter#ContentPresenter
   Background=#CCFFFFFF
   BorderThickness=1
   BorderBrush=#14000000
+#! No entrance animations: the notifications appear in place when the center opens.
+ActionCenter.NotificationListView#MainListView
+  ItemContainerTransitions:=
+  Transitions:=
+ActionCenter.ActionCenterPage > Grid#RootGrid
+  ChildrenTransitions:=
+  Transitions:=
+Grid#NotificationCenterBackground
+  ChildrenTransitions:=
+  Transitions:=
+ActionCenter.NotificationCenterView#NotificationCenterView
+  Transitions:=
