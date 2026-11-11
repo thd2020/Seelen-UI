@@ -1,11 +1,9 @@
-// Places Windows' notification center as a floating card under Seelen's top bar.
-// The Windhawk "Notification Center Styler" lays the center's content out as a W x H card in the
-// top-left corner of its window; this moves and shrinks the window to that card, at the top right
-// of the monitor's work area (below the top bar), and rounds its corners. Windows keeps the
-// center's window opaque, so the window itself must be the card's size.
+// Places Windows' notification banners under Seelen's top bar, as rounded cards, and toggles the
+// notification center for the top-bar bell. The center itself is sized and shaped by the
+// seelen-notification-cards mod inside the notification host; W x H must match its card.
 using System; using System.Text; using System.Threading; using System.Runtime.InteropServices;
 static class CenterPlacer {
-  const int W = 380, H = 560, Gap = 8, Radius = 12;
+  const int W = 396, H = 560, Gap = 8, Radius = 12;
   const int BannerSide = 16, BannerTop = 71, BannerBottom = 11, BannerRadius = 14;
   static IntPtr lastBanner; static int lastBannerSize;
   delegate void WinEventProc(IntPtr hook, uint ev, IntPtr hwnd, int idObject, int idChild, uint thread, uint time);
@@ -116,7 +114,8 @@ static class CenterPlacer {
   [DllImport("gdi32.dll")] static extern IntPtr CreateRectRgn(int a, int b, int c, int d);
   [DllImport("gdi32.dll")] static extern int CombineRgn(IntPtr dst, IntPtr a, IntPtr b, int mode);
   [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr o);
-  // The open center: the notification host's tall window, shown and not cloaked.
+  // The open center: the notification host's window, shown and not cloaked, either at the card's
+  // size (the seelen-notification-cards mod sets it) or still at the shell's full height.
   static IntPtr OpenCenter() {
     IntPtr h = IntPtr.Zero;
     while ((h = FindWindowEx(IntPtr.Zero, h, "Windows.UI.Core.CoreWindow", null)) != IntPtr.Zero) {
@@ -126,7 +125,8 @@ static class CenterPlacer {
       RECT r; GetWindowRect(h, out r);
       var mi = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
       GetMonitorInfo(MonitorFromWindow(h, 2), ref mi);
-      if (cloaked == 0 && r.B - r.T >= (mi.rcMonitor.B - mi.rcMonitor.T) * 6 / 10) return h;
+      bool card = r.R - r.L == W && r.B - r.T == H;
+      if (cloaked == 0 && (card || r.B - r.T >= (mi.rcMonitor.B - mi.rcMonitor.T) * 6 / 10)) return h;
     }
     return IntPtr.Zero;
   }

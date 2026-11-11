@@ -119,7 +119,7 @@ static Controls::ListViewBase FindListAncestor(DependencyObject o) {
 
 
 // ---- placement of the center's window ----
-static const int kCardWidth = 380, kCardHeight = 560, kGap = 8, kRadius = 12;
+static const int kCardWidth = 396, kCardHeight = 560, kGap = 8, kRadius = 12;
 
 // The window shape for a card with rounded corners of radius r. Window regions have no
 // anti-aliasing, so each corner keeps only the pixels the card's rounded corner fully covers.
@@ -150,24 +150,21 @@ static bool IsCoreWindow(HWND h) {
 using SetWindowPos_t = BOOL(WINAPI*)(HWND, HWND, int, int, int, int, UINT);
 static SetWindowPos_t SetWindowPos_Original;
 static BOOL WINAPI SetWindowPos_Hook(HWND h, HWND after, int x, int y, int cx, int cy, UINT flags) {
-    BOOL ok = SetWindowPos_Original(h, after, x, y, cx, cy, flags);
-    if (!(flags & SWP_NOSIZE) && cx > 0 && cy > 0 && IsCoreWindow(h)) {
+    if (!(flags & SWP_NOSIZE) && cy > 0 && IsCoreWindow(h)) {
         MONITORINFO mi{sizeof(mi)};
-        if (GetMonitorInfo(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mi)) {
-            int monitorHeight = mi.rcMonitor.bottom - mi.rcMonitor.top;
-            if (cy >= monitorHeight * 6 / 10) {
-                // The center, at the size the shell gives it (its open animation is built for that
-                // size, so it isn't changed). Its content is laid out as a card kGap in from the
-                // window's top-left corner (styler: RootGrid Margin), and the window is cut to it.
-                HRGN card = CardRegion(kCardWidth, kCardHeight, kRadius);
-                OffsetRgn(card, kGap, kGap);
-                SetWindowRgn(h, card, TRUE);
-            }
+        if (GetMonitorInfo(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mi) &&
+            cy >= (mi.rcMonitor.bottom - mi.rcMonitor.top) * 6 / 10) {
+            // The center opening at full height: make the window the card, under the top bar. The
+            // shell draws the window's frosted backdrop and edge line to the window's size, so they
+            // then match the card too.
+            int cardX = mi.rcWork.right - kGap - kCardWidth, cardY = mi.rcWork.top + kGap;
+            BOOL ok = SetWindowPos_Original(h, after, cardX, cardY, cx == 0 ? 0 : kCardWidth, kCardHeight, flags & ~SWP_NOMOVE);
+            if (cx != 0) SetWindowRgn(h, CardRegion(kCardWidth, kCardHeight, kRadius), TRUE);
+            return ok;
         }
     }
-    return ok;
+    return SetWindowPos_Original(h, after, x, y, cx, cy, flags);
 }
-
 
 // Cuts the center's window to the card when it has no shape yet. The shell keeps the window at the
 // same size from one open to the next, so this can't wait for a resize: it runs when the mod
@@ -178,11 +175,14 @@ static void EnsureCardShape(HWND h) {
     GetWindowRect(h, &r);
     MONITORINFO mi{sizeof(mi)};
     if (!GetMonitorInfo(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mi)) return;
-    if (r.bottom - r.top < (mi.rcMonitor.bottom - mi.rcMonitor.top) * 6 / 10) return;
-    if (GetWindowRgnBox(h, &box) != ERROR) return;  // already shaped
-    HRGN card = CardRegion(kCardWidth, kCardHeight, kRadius);
-    OffsetRgn(card, kGap, kGap);
-    SetWindowRgn(h, card, TRUE);
+    if (r.bottom - r.top >= (mi.rcMonitor.bottom - mi.rcMonitor.top) * 6 / 10) {
+        SetWindowPos_Original(h, nullptr, mi.rcWork.right - kGap - kCardWidth, mi.rcWork.top + kGap, kCardWidth, kCardHeight,
+                              SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowRgn(h, CardRegion(kCardWidth, kCardHeight, kRadius), TRUE);
+        return;
+    }
+    if (r.right - r.left == kCardWidth && r.bottom - r.top == kCardHeight && GetWindowRgnBox(h, &box) == ERROR)
+        SetWindowRgn(h, CardRegion(kCardWidth, kCardHeight, kRadius), TRUE);
 }
 
 // Adds or updates the icon-and-name row at the top of one notification card.

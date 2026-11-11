@@ -1,10 +1,10 @@
-#! Card: 380 x 560, 8 px in from the window's top-left corner; the cards mod cuts the window to it.
+#! Card: 396 x 560 (the width Windows gives the center), filling the center's window; the cards mod sizes and shapes the window to it.
 ActionCenter.ActionCenterPage > Grid#RootGrid
-  Width=380
+  Width=396
   Height=560
   HorizontalAlignment=Left
   VerticalAlignment=Top
-  Margin=8,8,0,0
+  Margin=0
 ActionCenter.ActionCenterPage
   Background=Transparent
 Grid#ActionCenterBackground
@@ -34,6 +34,9 @@ ActionCenter.NotificationListViewHeaderItem
   Margin=0
   Opacity=0
   IsHitTestVisible=False
+#! The divider Windows draws between conversations: the cards are already apart.
+Rectangle#SubgroupNotificationRule
+  Visibility=Collapsed
 Border#ItemOpaquePlating
   Background=#CCFFFFFF
   CornerRadius=14
@@ -41,8 +44,12 @@ Border#ItemOpaquePlating
   BorderBrush=#14000000
 Border#RevealBackground
   CornerRadius=14
+#! The 16 px gutter sits inside each card's row, not around the list: Windows pins each row's drawn
+#! position to the list's left edge (for swipe to dismiss), which shifted a padded list 16 px left.
+ScrollContentPresenter#ScrollContentPresenter > ItemsPresenter
+  Padding=0
 ActionCenter.ItemView > Grid#MainGrid
-  Margin=0,0,0,8
+  Margin=16,0,16,8
 TextBlock#Attribution
   Foreground=#80000000
   FontSize=11
@@ -81,15 +88,3 @@ Button#VerbButton > ContentPresenter#ContentPresenter
   Background=#CCFFFFFF
   BorderThickness=1
   BorderBrush=#14000000
-#! No entrance animations: the notifications appear in place when the center opens.
-ActionCenter.NotificationListView#MainListView
-  ItemContainerTransitions:=
-  Transitions:=
-ActionCenter.ActionCenterPage > Grid#RootGrid
-  ChildrenTransitions:=
-  Transitions:=
-Grid#NotificationCenterBackground
-  ChildrenTransitions:=
-  Transitions:=
-ActionCenter.NotificationCenterView#NotificationCenterView
-  Transitions:=
