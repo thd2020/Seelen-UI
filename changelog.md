@@ -6,12 +6,13 @@
 
 - turning off notification popups in the flyouts now leaves notifications to Windows: its banners and notification
   center show while the dock is on.
+- dock badges show the number of the app's notifications in the notification center first, including Windows 10 tray
+  balloons and apps that notify under another app id, matched by app name.
+
 ### fix
 
 - explorer crashing on Windows 10 when the dock is enabled, caused by the native taskbar being hidden in an endless
   loop.
-- dock badges show the number of the app's notifications in the notification center first, including Windows 10 tray
-  balloons and apps that notify under another app id, matched by app name.
 
 ## [2.8.10]
 
