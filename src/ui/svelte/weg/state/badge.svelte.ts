@@ -1,7 +1,7 @@
 import type { AppOrFileWegItem } from "../types";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { notifications } from "./getters.svelte";
-import { BadgeGlyph, type UserAppWindow } from "@seelen-ui/lib/types";
+import { type AppNotification, BadgeGlyph, type UserAppWindow } from "@seelen-ui/lib/types";
 import type { IconName } from "libs/ui/icons";
 
 function getGlyphIconName(glyph: BadgeGlyph) {
@@ -42,6 +42,13 @@ type Badge =
   | { type: "image"; src: string };
 
 export function getBadge(item: AppOrFileWegItem, windows: UserAppWindow[]): Badge | null {
+  // The notifications waiting in the notification center come first, so the badge is the real
+  // count of what the app sent and drops as they are opened or dismissed.
+  const notificationsCount = notifications.value.filter((n) => isFromApp(n, item)).length;
+  if (notificationsCount) {
+    return { type: "count", count: Math.min(notificationsCount, 99) };
+  }
+
   const badgeValue = windows.find((w) => w.badgeValue)?.badgeValue;
   if (badgeValue) {
     if (typeof badgeValue === "number") {
@@ -67,10 +74,22 @@ export function getBadge(item: AppOrFileWegItem, windows: UserAppWindow[]): Badg
     };
   }
 
-  const notificationsCount = notifications.value.filter((n) => n.appUmid === item.umid).length;
-  if (notificationsCount) {
-    return { type: "count", count: Math.min(notificationsCount, 99) };
-  }
-
   return null;
+}
+
+/**
+ * A notification belongs to the dock item when it was sent under the item's app id. Otherwise the
+ * app name decides: Windows 10 files tray balloons under Explorer with a per-icon id, and some
+ * apps notify under an id other than their window's, so only the name ties them to the app.
+ */
+function isFromApp(notification: AppNotification, item: AppOrFileWegItem): boolean {
+  if (item.umid && notification.appUmid === item.umid) {
+    return true;
+  }
+  const name = notification.appName.trim().toLowerCase();
+  if (!name) {
+    return false;
+  }
+  const fileStem = item.path.split(/[\\/]/).pop()?.replace(/\.[^.]*$/, "") ?? "";
+  return name === item.displayName.trim().toLowerCase() || name === fileStem.toLowerCase();
 }
