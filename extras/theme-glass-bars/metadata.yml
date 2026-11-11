@@ -1,0 +1,35 @@
+id: "@user/glass-bars"
+metadata:
+  displayName: Glass bars
+  description: More transparent top bar and dock, with a line-icon set for tray apps
+  tags:
+    - weg
+    - toolbar
+styles:
+  "@seelen/fancy-toolbar": !include styles/fancy-toolbar.scss
+  "@seelen/weg": !include styles/weg.scss
+settings:
+  - syntax: <number>
+    name: --glass-alpha
+    label: Bar opacity
+    description: Background opacity of the top bar and the dock, in percent.
+    initialValue: 50
+    min: 0
+    max: 100
+    step: 5
+  - syntax: <number>
+    name: --icon-size
+    label: Icon size
+    description: Size of the icons on the right of the top bar, tray apps included, in percent.
+    initialValue: 100
+    min: 60
+    max: 160
+    step: 5
+  - syntax: <number>
+    name: --icon-gap
+    label: Icon spacing
+    description: Extra space between the icons on the right of the top bar, in pixels.
+    initialValue: 0
+    min: -8
+    max: 16
+    step: 1
