@@ -6,6 +6,8 @@
 using System; using System.Text; using System.Threading; using System.Runtime.InteropServices;
 static class CenterPlacer {
   const int W = 380, H = 560, Gap = 8, Radius = 12;
+  const int BannerSide = 16, BannerTop = 71, BannerBottom = 11;
+  static IntPtr lastBanner; static int lastBannerSize;
   delegate void WinEventProc(IntPtr hook, uint ev, IntPtr hwnd, int idObject, int idChild, uint thread, uint time);
   static WinEventProc proc;
   static void Main() {
@@ -30,7 +32,24 @@ static class CenterPlacer {
     // Windows' own full-height placement at the right edge, or a card this tool placed before.
     bool isCenter = ((r.B - r.T) >= monH * 6 / 10 && r.R == mi.rcMonitor.R) || (r.R - r.L == W && r.B - r.T == H);
     bool placed = r.L == x && r.T == y && r.R - r.L == W && r.B - r.T == H;
-    if (!isCenter || placed) return;
+    if (!isCenter) {
+      // Banners: Windows puts their window in the bottom-right corner, above where its taskbar
+      // would be. The card sits BannerSide px in from the window's sides, BannerTop from its top and
+      // BannerBottom from its bottom, with a square shadow around it. Move the window so the card's
+      // top lines up with the center's, and cut the window to the card's rounded shape.
+      int bw = r.R - r.L, bh = r.B - r.T;
+      if (r.R < mi.rcWork.R - 2 || bh >= monH / 2) return;
+      bool bottomRight = r.B >= mi.rcWork.B - 80;
+      bool ours = r.T == y - BannerTop;
+      if (!bottomRight && !ours) return;
+      if (bottomRight) SetWindowPos(hwnd, IntPtr.Zero, r.L, y - BannerTop, 0, 0, 0x15);
+      if (lastBanner != hwnd || lastBannerSize != bw * 100000 + bh) {
+        lastBanner = hwnd; lastBannerSize = bw * 100000 + bh;
+        SetWindowRgn(hwnd, CreateRoundRectRgn(BannerSide, BannerTop, bw - BannerSide + 1, bh - BannerBottom + 1, Radius * 2 + 4, Radius * 2 + 4), true);
+      }
+      return;
+    }
+    if (placed) return;
     SetWindowPos(hwnd, IntPtr.Zero, x, y, W, H, 0x14);
     SetWindowRgn(hwnd, CreateRoundRectRgn(0, 0, W + 1, H + 1, Radius * 2, Radius * 2), true);
   }
