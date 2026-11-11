@@ -6,6 +6,10 @@
 
 - turning off notification popups in the flyouts now leaves notifications to Windows: its banners and notification
   center show while the dock is on.
+### fix
+
+- explorer crashing on Windows 10 when the dock is enabled, caused by the native taskbar being hidden in an endless
+  loop.
 
 ## [2.8.10]
 
