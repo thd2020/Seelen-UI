@@ -13,6 +13,10 @@ Grid#ActionCenterBackground
   Background:=<AcrylicBrush TintColor="#FFF4F4F6" TintOpacity="0.62" BackgroundSource="HostBackdrop" FallbackColor="#F5F4F4F6" />
 Image#DropShadow
   Visibility=Collapsed
+  Opacity=0
+  Width=0
+  Height=0
+  Source:=
 Grid#NotificationCenterBackground
   Background=Transparent
   Height=560
