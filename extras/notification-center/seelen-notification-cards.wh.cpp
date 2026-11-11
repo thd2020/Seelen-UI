@@ -168,6 +168,23 @@ static BOOL WINAPI SetWindowPos_Hook(HWND h, HWND after, int x, int y, int cx, i
     return ok;
 }
 
+
+// Cuts the center's window to the card when it has no shape yet. The shell keeps the window at the
+// same size from one open to the next, so this can't wait for a resize: it runs when the mod
+// attaches to the window and on every timer pass. A window shape lasts until it is replaced.
+static void EnsureCardShape(HWND h) {
+    if (!IsCoreWindow(h)) return;
+    RECT r, box;
+    GetWindowRect(h, &r);
+    MONITORINFO mi{sizeof(mi)};
+    if (!GetMonitorInfo(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mi)) return;
+    if (r.bottom - r.top < (mi.rcMonitor.bottom - mi.rcMonitor.top) * 6 / 10) return;
+    if (GetWindowRgnBox(h, &box) != ERROR) return;  // already shaped
+    HRGN card = CardRegion(kCardWidth, kCardHeight, kRadius);
+    OffsetRgn(card, kGap, kGap);
+    SetWindowRgn(h, card, TRUE);
+}
+
 // Adds or updates the icon-and-name row at the top of one notification card.
 static bool IsShown(FrameworkElement const& fe) {
     return fe && fe.Visibility() == Visibility::Visible;
@@ -291,6 +308,7 @@ static void WriteClosedTime() {
 }
 
 static LRESULT CALLBACK NoteDeactivation(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
+    if (msg == WM_WINDOWPOSCHANGED || msg == WM_SHOWWINDOW) EnsureCardShape(h);
     if (msg == WM_ACTIVATE && LOWORD(wp) == WA_INACTIVE) WriteClosedTime();
     if (msg == WM_NCDESTROY) RemoveWindowSubclass(h, NoteDeactivation, 1);
     return DefSubclassProc(h, msg, wp, lp);
@@ -311,6 +329,7 @@ static void WINAPI StartOnThisThread(PVOID) {
         t_state->timer = DispatcherTimer();
         t_state->timer.Interval(std::chrono::milliseconds(500));
         t_state->timer.Tick([](auto&&, auto&&) {
+            EnumThreadWindows(GetCurrentThreadId(), [](HWND h, LPARAM) -> BOOL { EnsureCardShape(h); return TRUE; }, 0);
             try {
                 if (auto w = Window::Current())
                     if (auto content = w.Content()) Walk(content, 0);
@@ -324,7 +343,10 @@ static void WINAPI StartOnThisThread(PVOID) {
         EnumThreadWindows(GetCurrentThreadId(), [](HWND h, LPARAM) -> BOOL {
             wchar_t cls[64] = L"";
             GetClassName(h, cls, 64);
-            if (wcscmp(cls, L"Windows.UI.Core.CoreWindow") == 0) SetWindowSubclass(h, NoteDeactivation, 1, 0);
+            if (wcscmp(cls, L"Windows.UI.Core.CoreWindow") == 0) {
+                SetWindowSubclass(h, NoteDeactivation, 1, 0);
+                EnsureCardShape(h);
+            }
             return TRUE;
         }, 0);
     } catch (...) {
