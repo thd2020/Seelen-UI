@@ -19,7 +19,8 @@
 // are PNG files in the notification host's own LocalState\seelen-icons folder (the host runs
 // sandboxed and can read only its package folders), listed in map.txt as "app name=file.png".
 //
-// A timer on each of the host's UI threads re-checks the visible cards twice a second, which also
+// The icon map loads on the mod's own thread at start. A timer on each of the host's UI
+// threads re-checks the visible cards twice a second, which also
 // covers containers the list recycles for other notifications. Every step is guarded: anything
 // unexpected skips that card instead of taking down the host.
 
@@ -212,7 +213,6 @@ static void WINAPI StartOnThisThread(PVOID) {
         if (t_state) return;
         auto window = Window::Current();
         if (!window) return;
-        LoadIconMap();
         t_state = new ThreadState();
         t_state->timer = DispatcherTimer();
         t_state->timer.Interval(std::chrono::milliseconds(500));
@@ -280,6 +280,10 @@ static std::vector<HWND> CoreWindows() {
 
 // The host creates its windows after it starts; keep looking for new ones for a while.
 static DWORD WINAPI StartLater(LPVOID) {
+    // Load the icon map here, on this thread's own apartment: the UI-thread start runs inside a
+    // SendMessage, where Windows refuses outgoing COM calls (RPC_E_CANTCALLOUT_ININPUTSYNCCALL).
+    try { winrt::init_apartment(winrt::apartment_type::multi_threaded); } catch (...) {}
+    LoadIconMap();
     for (int i = 0; i < 120; i++) {
         for (HWND h : CoreWindows()) RunFromWindowThread(h, StartOnThisThread);
         Sleep(1000);
