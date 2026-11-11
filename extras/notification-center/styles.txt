@@ -20,60 +20,44 @@ Grid#NotificationCenterBackground
 #! No quick-action tiles: Seelen's own quick settings replace them.
 Grid#ControlCenterBackground
   Visibility=Collapsed
-#! Android-style groups: the app header is the top strip of the group's card.
-ActionCenter.GroupView > Grid#GroupGrid
-  Background=#CCFFFFFF
-  CornerRadius=14,14,4,4
-  BorderThickness=1
-  BorderBrush=#14000000
-  Padding=10,0,2,0
-  Margin=0,10,0,0
-  Height=30
-ActionCenter.GroupTitleView#GroupTitle
-  HorizontalAlignment=Left
-ActionCenter.GroupTitleView > Grid#GroupTitleGrid > Border#Border > TextBlock#Title
-  FontSize=12
-  FontWeight=SemiBold
-  Foreground=#8A000000
+#! One card per notification. The per-app header rows stay in the layout at zero height, because
+#! the seelen-notification-cards mod reads each card's app from them and adds it to the card.
+ActionCenter.NotificationListViewHeaderItem
+  MinHeight=0
+  Height=0
+  Padding=0
+  Margin=0
+  Opacity=0
+  IsHitTestVisible=False
 Border#ItemOpaquePlating
   Background=#CCFFFFFF
-  CornerRadius=4,4,14,14
+  CornerRadius=14
   BorderThickness=1
   BorderBrush=#14000000
 Border#RevealBackground
-  CornerRadius=4,4,14,14
+  CornerRadius=14
 ActionCenter.ItemView > Grid#MainGrid
-  Margin=0,2,0,0
+  Margin=0,0,0,8
 TextBlock#Attribution
   Foreground=#80000000
   FontSize=11
-ActionCenter.NotificationListViewHeaderItem
-  MinHeight=0
+#! Buttons as round icons: settings (gear) at the top, clear all (broom) at the bottom. The collapse
+#! button only folds the quick-action tiles, which are hidden, so it goes too.
+Button#ManageNotificationSettingsButton
+  Content:=<FontIcon Glyph="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="16" Foreground="#D9000000" />
+ActionCenter.ClearAllButton#ClearAllButtonControl > Button#ClearAll
+  Content:=<FontIcon Glyph="&#xEA99;" FontFamily="Segoe MDL2 Assets" FontSize="16" Foreground="#D9000000" />
+ControlCenter.ExpandCollapseButton#ExpandCollapseButtonControl
+  Visibility=Collapsed
+Button#ManageNotificationSettingsButton > Grid > Border#Border, ActionCenter.ClearAllButton#ClearAllButtonControl > Button#ClearAll > Grid > Border#Border
+  Width=36
+  Height=36
   Padding=0
-  Margin=0
-ActionCenter.GroupView
-  VerticalAlignment=Bottom
-  Margin=0
-#! Text buttons as pill chips: manage, collapse, clear all.
-Button#ManageNotificationSettingsButton > Grid > Border#Border
-  Background=#B3FFFFFF
-  CornerRadius=14
+  CornerRadius=18
+  Background=#E6FFFFFF
   BorderThickness=1
-  BorderBrush=#14000000
-  Padding=10,0,10,0
-ActionCenter.ClearAllButton#ClearAllButtonControl > Button#ClearAll > Grid > Border#Border
-  Background=#B3FFFFFF
-  CornerRadius=14
-  BorderThickness=1
-  BorderBrush=#14000000
-  Padding=10,0,10,0
-ControlCenter.ExpandCollapseButton#ExpandCollapseButtonControl > Button > Grid > Border#Border
-  Background=#B3FFFFFF
-  CornerRadius=14
-  BorderThickness=1
-  BorderBrush=#14000000
-  Padding=10,0,10,0
-#! Banners: the same frosted card, grey app strip and pill action buttons.
+  BorderBrush=#1F000000
+#! Banners: the same frosted card, grey app strip and pill action buttons. No accent plate behind the app icon.
 Border#ToastBorder
   CornerRadius=14
   BorderThickness=1
@@ -81,6 +65,8 @@ Border#ToastBorder
   Background:=<AcrylicBrush TintColor="#FFF4F4F6" TintOpacity="0.62" BackgroundSource="HostBackdrop" FallbackColor="#F5F4F4F6" />
 Border#ToastRevealBorder
   CornerRadius=14
+Border#AppLogoBorder
+  Background=Transparent
 TextBlock#SenderName
   FontSize=12
   FontWeight=SemiBold
