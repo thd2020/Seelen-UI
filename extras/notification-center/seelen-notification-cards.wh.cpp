@@ -206,18 +206,19 @@ static void PatchCard(DependencyObject const& item) {
     if (container.Visibility() != wanted) container.Visibility(wanted);
     if (header) return;
 
-    auto list = FindListAncestor(Media::VisualTreeHelper::GetParent(item));
-    if (!list) return;
-    auto selector = item.try_as<Controls::Primitives::SelectorItem>();
-    if (!selector) return;
-    auto groupHeader = list.GroupHeaderContainerFromItemContainer(selector);
-    if (!groupHeader) return;
-
     std::wstring appName;
     Media::ImageSource logo{nullptr};
-    if (auto title = FindNamed(groupHeader, L"Title").try_as<Controls::TextBlock>()) appName = title.Text().c_str();
-    if (auto image = FindNamed(groupHeader, L"StandardImage").try_as<Controls::Image>()) logo = image.Source();
-    if (appName.empty()) return;
+    if (auto list = FindListAncestor(Media::VisualTreeHelper::GetParent(item))) {
+        if (auto selector = item.try_as<Controls::Primitives::SelectorItem>()) {
+            auto groupHeader = list.GroupHeaderContainerFromItemContainer(selector);
+            if (groupHeader) {
+                if (auto title = FindNamed(groupHeader, L"Title").try_as<Controls::TextBlock>())
+                    appName = title.Text().c_str();
+                if (auto image = FindNamed(groupHeader, L"StandardImage").try_as<Controls::Image>())
+                    logo = image.Source();
+            }
+        }
+    }
 
     auto panel = FindNamed(item, L"TextContentPanel").try_as<Controls::StackPanel>();
     if (!panel) return;
@@ -232,17 +233,15 @@ static void PatchCard(DependencyObject const& item) {
     }
     if (row) {
         // Same app as last time: nothing to do. Recycled for another app: rebuild below.
-        auto text = row.Children().GetAt(1).try_as<Controls::TextBlock>();
+        Controls::TextBlock text{nullptr};
+        if (row.Children().Size() > 1)
+            text = row.Children().GetAt(1).try_as<Controls::TextBlock>();
         if (text && text.Text() == appName) return;
         children.RemoveAt(0);
     }
 
-    Controls::Image icon;
-    icon.Width(16);
-    icon.Height(16);
-    icon.VerticalAlignment(VerticalAlignment::Center);
     auto themed = ThemeIcon(appName);
-    icon.Source(themed ? themed : logo);
+    auto iconSource = themed ? themed : logo;
 
     Controls::TextBlock name;
     name.Text(appName);
@@ -257,7 +256,24 @@ static void PatchCard(DependencyObject const& item) {
     newRow.Orientation(Controls::Orientation::Horizontal);
     newRow.Margin(ThicknessHelper::FromLengths(0, 0, 0, 6));
     newRow.Tag(winrt::box_value(winrt::hstring(kHeaderTag)));
-    newRow.Children().Append(icon);
+    if (iconSource) {
+        Controls::Image icon;
+        icon.Width(16);
+        icon.Height(16);
+        icon.VerticalAlignment(VerticalAlignment::Center);
+        icon.Source(iconSource);
+        newRow.Children().Append(icon);
+    } else {
+        Controls::FontIcon icon;
+        icon.Glyph(L"\uECAA");
+        icon.FontFamily(Media::FontFamily(L"Segoe MDL2 Assets"));
+        icon.FontSize(16);
+        icon.Width(16);
+        icon.Height(16);
+        icon.Foreground(name.Foreground());
+        icon.VerticalAlignment(VerticalAlignment::Center);
+        newRow.Children().Append(icon);
+    }
     newRow.Children().Append(name);
     children.InsertAt(0, newRow);
 }
