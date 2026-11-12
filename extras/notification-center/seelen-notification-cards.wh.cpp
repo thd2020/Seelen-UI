@@ -2,7 +2,7 @@
 // @id              seelen-notification-cards
 // @name            Seelen notification cards
 // @description     Windows 10's notification center as a compact card under the top bar: one card per notification with its app's icon and name, theme icons for known apps
-// @version         1.0
+// @version         1.3
 // @author          thd2020
 // @include         ShellExperienceHost.exe
 // @architecture    x86-64
