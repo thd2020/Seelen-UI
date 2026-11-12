@@ -1,3 +1,4 @@
+> Updated 2026-11-12: The mod disables the notification center's DWM window transition before showing it.
 > Updated 2026-11-12: Cards with the same app, title, message, and displayed time now appear once.
 > Updated 2026-11-12: Every notification card now keeps an icon visible, including apps with no usable logo.
 
