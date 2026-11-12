@@ -274,7 +274,14 @@ static void PatchCard(DependencyObject const& item, std::unordered_set<std::wstr
         Controls::TextBlock text{nullptr};
         if (row.Children().Size() > 1)
             text = row.Children().GetAt(1).try_as<Controls::TextBlock>();
-        if (text && text.Text() == appName) return;
+        if (text && text.Text() == appName && row.Children().Size() > 0) {
+            auto icon = row.Children().GetAt(0);
+            if (auto image = icon.try_as<Controls::Image>()) {
+                if (image.Source()) return;
+            } else if (icon.try_as<Controls::FontIcon>()) {
+                return;
+            }
+        }
         children.RemoveAt(0);
     }
 
