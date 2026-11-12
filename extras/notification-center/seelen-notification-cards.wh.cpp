@@ -31,6 +31,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <cstdint>
 #include <vector>
 #include <sstream>
 #include <cmath>
@@ -207,13 +208,15 @@ static std::wstring VisibleText(DependencyObject const& item, std::wstring_view 
     return IsShown(text) ? text.Text().c_str() : L"";
 }
 
-static std::wstring DuplicateKey(DependencyObject const& item, std::wstring const& appName) {
-    if (appName.empty()) return L"";
+static std::wstring DuplicateKey(DependencyObject const& item, std::wstring const& appName, std::uintptr_t appGroupId) {
+    if (appName.empty() || appGroupId == 0) return L"";
     auto title = VisibleText(item, L"Title");
     auto content = VisibleText(item, L"Content");
     if (title.empty() && content.empty()) return L"";
 
-    std::wstring key = Lower(appName);
+    std::wstring key = std::to_wstring(appGroupId);
+    key.push_back(L'\x1f');
+    key += Lower(appName);
     for (auto const& part : {title, content, VisibleText(item, L"Attribution")}) {
         key.push_back(L'\x1f');
         key += part;
@@ -238,11 +241,13 @@ static void PatchCard(DependencyObject const& item, std::unordered_set<std::wstr
     if (header) return;
 
     std::wstring appName;
+    std::uintptr_t appGroupId = 0;
     Media::ImageSource logo{nullptr};
     if (auto list = FindListAncestor(Media::VisualTreeHelper::GetParent(item))) {
         if (auto selector = item.try_as<Controls::Primitives::SelectorItem>()) {
             auto groupHeader = list.GroupHeaderContainerFromItemContainer(selector);
             if (groupHeader) {
+                appGroupId = reinterpret_cast<std::uintptr_t>(winrt::get_abi(groupHeader));
                 if (auto title = FindNamed(groupHeader, L"Title").try_as<Controls::TextBlock>())
                     appName = title.Text().c_str();
                 if (auto image = FindNamed(groupHeader, L"StandardImage").try_as<Controls::Image>())
@@ -251,7 +256,7 @@ static void PatchCard(DependencyObject const& item, std::unordered_set<std::wstr
         }
     }
 
-    auto key = DuplicateKey(item, appName);
+    auto key = DuplicateKey(item, appName, appGroupId);
     if (!key.empty() && !seenNotifications.insert(key).second) {
         // Hide repeated cards without removing their notifications from Windows' history.
         container.Visibility(Visibility::Collapsed);
