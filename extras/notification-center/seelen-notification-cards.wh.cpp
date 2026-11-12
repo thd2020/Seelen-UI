@@ -29,6 +29,7 @@
 #undef GetCurrentTime
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <sstream>
 #include <cmath>
@@ -190,6 +191,25 @@ static bool IsShown(FrameworkElement const& fe) {
     return fe && fe.Visibility() == Visibility::Visible;
 }
 
+static std::wstring VisibleText(DependencyObject const& item, std::wstring_view name) {
+    auto text = FindNamed(item, name).try_as<Controls::TextBlock>();
+    return IsShown(text) ? text.Text().c_str() : L"";
+}
+
+static std::wstring DuplicateKey(DependencyObject const& item, std::wstring const& appName) {
+    if (appName.empty()) return L"";
+    auto title = VisibleText(item, L"Title");
+    auto content = VisibleText(item, L"Content");
+    if (title.empty() && content.empty()) return L"";
+
+    std::wstring key = Lower(appName);
+    for (auto const& part : {title, content, VisibleText(item, L"Attribution")}) {
+        key.push_back(L'\x1f');
+        key += part;
+    }
+    return key;
+}
+
 // A conversation header: the item has a title but no message and no time.
 static bool IsConversationHeader(DependencyObject const& item) {
     auto content = FindNamed(item, L"Content");
@@ -197,7 +217,7 @@ static bool IsConversationHeader(DependencyObject const& item) {
     return FindNamed(item, L"Title") && !IsShown(content) && !IsShown(attribution);
 }
 
-static void PatchCard(DependencyObject const& item) {
+static void PatchCard(DependencyObject const& item, std::unordered_set<std::wstring>& seenNotifications) {
     auto container = item.try_as<UIElement>();
     if (!container) return;
     // Containers are recycled, so set visibility both ways every time.
@@ -218,6 +238,13 @@ static void PatchCard(DependencyObject const& item) {
                     logo = image.Source();
             }
         }
+    }
+
+    auto key = DuplicateKey(item, appName);
+    if (!key.empty() && !seenNotifications.insert(key).second) {
+        // Hide repeated cards without removing their notifications from Windows' history.
+        container.Visibility(Visibility::Collapsed);
+        return;
     }
 
     auto panel = FindNamed(item, L"TextContentPanel").try_as<Controls::StackPanel>();
@@ -294,11 +321,11 @@ static void PatchBanner(DependencyObject const& toast) {
     logo.Tag(winrt::box_value(winrt::hstring(appName)));
 }
 
-static void Walk(DependencyObject const& o, int depth) {
+static void Walk(DependencyObject const& o, int depth, std::unordered_set<std::wstring>& seenNotifications) {
     if (!o || depth > 60) return;
     auto cls = winrt::get_class_name(o);
     if (cls == L"ActionCenter.NotificationListViewItem") {
-        try { PatchCard(o); } catch (...) {}
+        try { PatchCard(o, seenNotifications); } catch (...) {}
         return;
     }
     if (cls == L"ActionCenter.ToastView") {
@@ -306,7 +333,7 @@ static void Walk(DependencyObject const& o, int depth) {
         return;
     }
     int n = Media::VisualTreeHelper::GetChildrenCount(o);
-    for (int i = 0; i < n; i++) Walk(Media::VisualTreeHelper::GetChild(o, i), depth + 1);
+    for (int i = 0; i < n; i++) Walk(Media::VisualTreeHelper::GetChild(o, i), depth + 1, seenNotifications);
 }
 
 
@@ -348,7 +375,10 @@ static void WINAPI StartOnThisThread(PVOID) {
             EnumThreadWindows(GetCurrentThreadId(), [](HWND h, LPARAM) -> BOOL { EnsureCardShape(h); return TRUE; }, 0);
             try {
                 if (auto w = Window::Current())
-                    if (auto content = w.Content()) Walk(content, 0);
+                    if (auto content = w.Content()) {
+                        std::unordered_set<std::wstring> seenNotifications;
+                        Walk(content, 0, seenNotifications);
+                    }
             } catch (...) {
             }
         });
