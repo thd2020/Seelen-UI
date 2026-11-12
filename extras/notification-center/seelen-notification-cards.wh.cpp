@@ -6,7 +6,7 @@
 // @author          thd2020
 // @include         ShellExperienceHost.exe
 // @architecture    x86-64
-// @compilerOptions -lole32 -loleaut32 -lruntimeobject -lgdi32 -lcomctl32
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -lgdi32 -lcomctl32 -ldwmapi
 // ==/WindhawkMod==
 
 // Windows 10 groups the notification center by app: one header row (app logo on an accent plate
@@ -26,6 +26,7 @@
 
 #include <windows.h>
 #include <commctrl.h>
+#include <dwmapi.h>
 #undef GetCurrentTime
 #include <string>
 #include <unordered_map>
@@ -148,6 +149,11 @@ static bool IsCoreWindow(HWND h) {
     return wcscmp(cls, L"Windows.UI.Core.CoreWindow") == 0;
 }
 
+static void DisableWindowTransitions(HWND h) {
+    BOOL disabled = TRUE;
+    DwmSetWindowAttribute(h, DWMWA_TRANSITIONS_FORCEDISABLED, &disabled, sizeof(disabled));
+}
+
 using SetWindowPos_t = BOOL(WINAPI*)(HWND, HWND, int, int, int, int, UINT);
 static SetWindowPos_t SetWindowPos_Original;
 static BOOL WINAPI SetWindowPos_Hook(HWND h, HWND after, int x, int y, int cx, int cy, UINT flags) {
@@ -157,7 +163,8 @@ static BOOL WINAPI SetWindowPos_Hook(HWND h, HWND after, int x, int y, int cx, i
             cy >= (mi.rcMonitor.bottom - mi.rcMonitor.top) * 6 / 10) {
             // The center opening at full height: make the window the card, under the top bar. The
             // shell draws the window's frosted backdrop and edge line to the window's size, so they
-            // then match the card too.
+            // then match the card too. Disable its DWM transition before the shell shows it.
+            DisableWindowTransitions(h);
             int cardX = mi.rcWork.right - kGap - kCardWidth, cardY = mi.rcWork.top + kGap;
             BOOL ok = SetWindowPos_Original(h, after, cardX, cardY, cx == 0 ? 0 : kCardWidth, kCardHeight, flags & ~SWP_NOMOVE);
             if (cx != 0) SetWindowRgn(h, CardRegion(kCardWidth, kCardHeight, kRadius), TRUE);
@@ -177,13 +184,17 @@ static void EnsureCardShape(HWND h) {
     MONITORINFO mi{sizeof(mi)};
     if (!GetMonitorInfo(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mi)) return;
     if (r.bottom - r.top >= (mi.rcMonitor.bottom - mi.rcMonitor.top) * 6 / 10) {
+        DisableWindowTransitions(h);
         SetWindowPos_Original(h, nullptr, mi.rcWork.right - kGap - kCardWidth, mi.rcWork.top + kGap, kCardWidth, kCardHeight,
                               SWP_NOZORDER | SWP_NOACTIVATE);
         SetWindowRgn(h, CardRegion(kCardWidth, kCardHeight, kRadius), TRUE);
         return;
     }
-    if (r.right - r.left == kCardWidth && r.bottom - r.top == kCardHeight && GetWindowRgnBox(h, &box) == ERROR)
-        SetWindowRgn(h, CardRegion(kCardWidth, kCardHeight, kRadius), TRUE);
+    if (r.right - r.left == kCardWidth && r.bottom - r.top == kCardHeight) {
+        DisableWindowTransitions(h);
+        if (GetWindowRgnBox(h, &box) == ERROR)
+            SetWindowRgn(h, CardRegion(kCardWidth, kCardHeight, kRadius), TRUE);
+    }
 }
 
 // Adds or updates the icon-and-name row at the top of one notification card.
