@@ -208,6 +208,7 @@ fire-and-forget handlers.
 - `invoke(command, args)` — **whitelisted**: only a small allow-list of `SeelenCommand`s can be called this way (e.g.
   `SwitchWorkspace`, `SetVolumeLevel`, `OpenFile`). This is not the full command surface — it exists so toolbar items
   can trigger a handful of safe system actions without a full IPC bridge.
+  `invoke(SeelenCommand.ToggleNativeNotificationCenter)` opens or closes Windows' own notification center (Windows 10).
 - `open(path)` — opens a file, URL, or `ms-settings:` shell URI with the OS default handler.
 - `trigger(widgetId)` — pops up another widget (typically a `Popup`-preset widget like `@seelen/bluetooth-popup`)
   anchored at this toolbar item's screen position. This is how toolbar items open their associated popups.
