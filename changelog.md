@@ -7,7 +7,11 @@
 - turning off notification popups in the flyouts now leaves notifications to Windows: its banners and notification
   center show while the dock is on.
 - dock badges show the number of the app's notifications in the notification center first, including Windows 10 tray
-  balloons and apps that notify under another app id, matched by app name.
+  balloons and apps that notify under another app id, matched by app name. Notifications sent before the user last
+  opened the app no longer count, even while Windows keeps them in the notification center.
+- with notifications left to Windows on Windows 10, its notification center and banners are restyled as cards under the
+  top bar by Seelen itself, without Windhawk; the new `ToggleNativeNotificationCenter` toolbar action opens and closes
+  the center without a zoom.
 
 ### fix
 
