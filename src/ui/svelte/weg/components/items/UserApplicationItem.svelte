@@ -9,7 +9,7 @@
   import { getUserApplicationContextMenu, launchItem } from "../../appMenu.ts";
   import { triggerPreviewWidget } from "../../previewWidget.ts";
   import { CssHandled } from "libs/ui/svelte/utils/animations.ts";
-  import { getBadge } from "../../state/badge.svelte.ts";
+  import { getBadge, markAppSeen } from "../../state/badge.svelte.ts";
   import Icon from "libs/ui/svelte/components/Icon/Icon.svelte";
 
   interface Props {
@@ -27,6 +27,15 @@
     settings?.showWindowTitle && windows.length ? windows[0]!.title : null,
   );
   const isFocused = $derived(windows.some((w) => w.hwnd === focused.value?.hwnd));
+
+  // Opening the app shows the user what its notifications were about, so they no longer count
+  // in the badge, while focused and from then on.
+  $effect(() => {
+    if (!isFocused) return;
+    const focusedItem = item;
+    markAppSeen(focusedItem, true);
+    return () => markAppSeen(focusedItem, false);
+  });
   const isFlashing = $derived(windows.some((w) => w.attention === WindowAttention.Flashing));
   const needsAttention = $derived(
     isFlashing || windows.some((w) => w.attention === WindowAttention.Highlighted),
