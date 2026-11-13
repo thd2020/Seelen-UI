@@ -1,33 +1,61 @@
-> Updated 2026-11-12: The mod disables the notification center's DWM window transition before showing it.
-> Updated 2026-11-12: Matching cards in one app group show once at a time; dismissing one may reveal the next copy.
-> Updated 2026-11-12: Every notification card now keeps an icon visible, including apps with no usable logo.
+> Updated 2026-11-13: Seelen UI does all of this itself now. Windhawk, its two mods, `CenterPlacer.exe` and the scripts
+> are no longer used; see "Moving from the Windhawk setup" below.
 
 # Windows' notification center in Seelen's style
 
-With Seelen's notification popups turned off, this fork leaves notifications to Windows, so banners, the notification center and clicks all work natively: a click opens the exact chat or page, for every app. These pieces make Windows 10's notification center and banners look and sit like part of Seelen. The center is a compact frosted card right under the top bar, without the quick-action tiles, since Seelen's own quick settings replace them. Notifications appear as rounded cards with their app's icon and name on top, Android-style; matching cards in the same app group show once at a time, and dismissing one may reveal the next copy. Apps your Seelen theme has an icon for show that line icon instead of their logo, and Windows' default app icon fills in when neither is available. Settings and clear-all are round icon buttons (gear and broom). Banners appear under the top bar as the same rounded card, with the theme icon too.
+With Seelen's notification popups turned off, this fork leaves notifications to Windows, so banners, the notification
+center and clicks all work natively: a click opens the exact chat or page, for every app. On Windows 10, Seelen then
+makes Windows' notification center and banners look and sit like part of Seelen:
 
-## Pieces
+- The center is a compact frosted card (396 × 560 at 100% scale) right under the top bar, without the quick-action
+  tiles, since Seelen's own quick settings replace them. It opens and closes without a zoom.
+- Notifications are rounded cards with their app's icon and name on top, Android-style. Apps the active theme has a
+  small icon for show that icon instead of their logo, and Windows' default app icon fills in when neither is available.
+  Conversation headers are hidden, and matching cards in the same app group show once at a time (dismissing one may
+  reveal the next copy, since Windows' notifications stay as they are).
+- Settings and clear-all are round icon buttons (gear and broom).
+- Banners appear under the top bar as the same rounded card, with the theme icon too.
 
-- `styles.txt`: the styles for the Windhawk mod [Windows 11 Notification Center Styler](https://windhawk.net/mods/windows-11-notification-center-styler) (version 1.8), which also loads into Windows 10's center. A line starting at the left margin names the element, the indented lines below it are its styles, and lines starting with `#!` are comments. The element names come from Windows 10 21H2's `ShellExperienceHost` (`ActionCenter.ActionCenterPage`, `ActionCenter.ItemView`, `ActionCenter.ToastView` and so on). The center's content is laid out as a 396 × 560 card filling the window (396 px is the width Windows gives the center). The list's 16 px side gutter sits inside each card's row rather than around the list: Windows pins each row's drawn position to the list's left edge for swipe to dismiss, so a padded list was drawn 16 px to the left.
-- `apply-styles.ps1`: writes `styles.txt` into the mod's settings in a portable Windhawk (it expects to sit in a folder inside the Windhawk folder) and restarts Windows' notification host so they apply.
-- `seelen-notification-cards.wh.cpp`: a small Windhawk mod running inside the notification host. Windows 10's center only names the app on a per-app header row; the mod adds an icon-and-name row to every card, using the app logo or Windows' default app icon when no theme icon or logo is available. It swaps in theme icons on cards and banners, hides conversation headers, and hides repeated cards in the same app group when their visible title, message, and attribution match. It leaves Windows' underlying notifications intact, so dismissing one displayed card may reveal the next copy. When the shell requests a full-height window, the mod resizes and shapes it to a 396 × 560 card before the first frame, then disables the window's DWM transition. It notes when the center loses focus, for the bell.
-- `install-icons.ps1`: renders the theme's SVG tray icons to PNG with headless Chrome (apps listed in `-KeepOwnLogo`, phevere by default, keep their own logo) and puts them, with a name-to-icon map built from the theme's `apps.json`, into the notification host's own `LocalState\seelen-icons` folder, the only place its sandbox can read.
-- `CenterPlacer.cs`: a small background program. Windows draws banners opaque in the bottom-right corner, so it moves each banner window under the top bar and cuts it to its rounded card (window shapes have no anti-aliasing, so the corners keep only pixels the card fully covers). Run with a `seelen-center:` link as its argument, it toggles the center for the top-bar bell: Windows' own command only ever opens it, so an open center is closed with Escape; a closed one is opened, unless a click elsewhere closed it a moment ago (the mod notes when the center loses focus). The card size in the mod, in `styles.txt` and in the placer must match (396 × 560).
+## How it works
 
-## Set up on a PC
+The code lives in the app itself:
 
-1. Extract portable Windhawk without admin rights: `windhawk_setup.exe /S /PORTABLE /D=<folder>`. Then let Windows' shell apps read that folder, since the notification center runs sandboxed: `icacls <folder> /grant *S-1-15-2-1:(OI)(CI)(RX) /T`.
-2. Install the styler mod and compile `seelen-notification-cards.wh.cpp` as a second mod (Windhawk's Create a new mod, or its bundled compiler). Put this folder inside the Windhawk folder, then run `install-icons.ps1` and `apply-styles.ps1`.
-3. Build the placer with the C# compiler that ships with Windows: `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe -target:winexe -out:CenterPlacer.exe CenterPlacer.cs`.
-4. Start `windhawk.exe -tray-only` and `CenterPlacer.exe` at sign-in, for example with shortcuts in the Startup folder.
+- `src/hook_dll/src/notification_center/` is a component of `sluhk.dll` that runs inside the notification host
+  (`ShellExperienceHost.exe`), on the UI thread of each of its windows. It sizes the center's window to the card and
+  moves the banners under the top bar from the window's own `WM_WINDOWPOSCHANGING`, before Windows applies the shell's
+  size, so the window is never resized while it opens. It turns off the window's DWM transitions, and restyles the
+  host's XAML (`style.rs` has the rules that used to be `styles.txt`; `cards.rs` the per-card rows).
+- `src/background/system_modules/native_notification_center/` loads the component: it copies `sluhk.dll` into the host's
+  own `LocalState` folder (the only place the sandboxed host can read), hooks the threads of the host's windows so
+  Windows loads it there, and attaches it to each window as it shows. It also copies the active theme's small icons
+  there (`tray-icons/apps.json` and the files it lists; SVG files are drawn as they are, no rendering step).
+- The component pins itself in the host, so it keeps working if Seelen closes, until the host restarts. Turning Seelen's
+  notification popups back on detaches it and restarts the host, which gives Windows' center its own look back.
 
-The top-bar bell opens and closes Windows' center: an inline toolbar item with the `Notifications` scope, `badge: return count > 0 ? count : null` and `onClick: open("seelen-center:toggle")`. Register the link for your user once:
+It is on whenever Seelen's notification popups are off, on Windows 10 only (Windows 11's center is a different one).
 
-```powershell
-$exe = "<folder>\CenterPlacer.exe"; $k = 'HKCU:\Software\Classes\seelen-center'
-New-Item "$k\shell\open\command" -Force | Out-Null
-Set-ItemProperty $k '(default)' 'URL:Seelen notification center'; Set-ItemProperty $k 'URL Protocol' ''
-Set-ItemProperty "$k\shell\open\command" '(default)' "`"$exe`" `"%1`""
+## The top-bar bell
+
+The bell opens and closes Windows' center through the shell's own Win + A handler, like the keyboard shortcut. Use an
+inline toolbar item with the `Notifications` scope:
+
+```yaml
+badge: "return count > 0 ? count : null"
+onClick: "invoke(SeelenCommand.ToggleNativeNotificationCenter)"
 ```
 
-Known limit: Windows 10 draws a faint one-pixel line just outside the left edge of the center's window (the shell's own decoration for edge panels, outside the window and its XAML). It runs straight along the card's left side for the card's full height, so it doesn't follow the rounded corners.
+A click elsewhere closes the open center just before the click lands; a bell click right after that leaves it closed.
+
+## Moving from the Windhawk setup
+
+1. In Windhawk, remove the "Windows 11 Notification Center Styler" and "Seelen notification cards" mods (or quit
+   Windhawk), and remove the `windhawk.exe -tray-only` and `CenterPlacer.exe` shortcuts from the Startup folder.
+2. Change the bell's `onClick` from `open("seelen-center:toggle")` to the one above, then remove the link:
+   `Remove-Item HKCU:\Software\Classes\seelen-center -Recurse`.
+3. Sign out and in (or end `ShellExperienceHost.exe` in Task Manager), so the host starts without the old mods.
+
+The old `LocalState\seelen-icons` folder is reused: Seelen replaces its PNG files with the theme's icons.
+
+Known limit: Windows 10 draws a faint one-pixel line just outside the left edge of the center's window (the shell's own
+decoration for edge panels, outside the window and its XAML). It runs straight along the card's left side for the card's
+full height, so it doesn't follow the rounded corners.

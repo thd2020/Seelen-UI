@@ -1,3 +1,5 @@
+mod notification_center;
+
 use slu_ipc::{
     AppIpc,
     messages::{AppMessage, IconEventData, Win32TaskbarButtonEvent, Win32TrayEvent},

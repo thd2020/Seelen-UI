@@ -49,6 +49,7 @@ pub mod media_devices;
 pub mod media_players;
 pub mod media_waveform;
 pub mod monitors;
+pub mod native_notification_center;
 pub mod network;
 pub mod notifications;
 pub mod power;
