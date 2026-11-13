@@ -107,6 +107,7 @@ impl WinEvent {
             Self::ObjectShow => WindowEvent::Shown,
             Self::ObjectHide => WindowEvent::Hidden,
             Self::ObjectUncloaked => WindowEvent::Uncloaked,
+            Self::ObjectCloaked => WindowEvent::Cloaked,
             Self::SystemForeground => WindowEvent::Foregrounded,
             Self::ObjectFocus => WindowEvent::Focused,
             Self::ObjectNameChange => WindowEvent::TitleChanged,
