@@ -3,6 +3,7 @@ pub mod commands;
 pub mod common;
 pub mod error;
 pub mod messages;
+pub mod notification_center;
 pub mod security;
 pub mod service;
 
