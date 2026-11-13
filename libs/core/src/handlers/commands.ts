@@ -138,6 +138,7 @@ export enum SeelenCommand {
   GetNotifications = "get_notifications",
   NotificationsClose = "notifications_close",
   NotificationsCloseAll = "notifications_close_all",
+  ToggleNativeNotificationCenter = "toggle_native_notification_center",
   ActivateNotification = "activate_notification",
   GetRadios = "get_radios",
   SetRadioState = "set_radios_state",
