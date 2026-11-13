@@ -13,7 +13,8 @@ use crate::{
     session::reemit_session,
     state::{AppSettings, FULL_STATE, initialize_user_resources_watcher},
     system_modules::{
-        clipboard::init_clipboard_manager, start::StartMenuManager, user::reemit_user,
+        clipboard::init_clipboard_manager, native_notification_center, start::StartMenuManager,
+        user::reemit_user,
     },
     utils::discord::{start_discord_rpc, update_discord_rpc},
     widgets::{
@@ -93,6 +94,7 @@ impl SeelenUI {
 
         WIDGET_MANAGER.reconcile()?;
         platform::start()?;
+        native_notification_center::apply_settings(&state);
 
         std::thread::spawn(init_clipboard_manager);
 
@@ -130,6 +132,8 @@ impl SeelenUI {
         } else {
             SeelenWeg::restore_native_taskbar()?;
         }
+
+        native_notification_center::apply_settings(state);
 
         // Re-emit user and session so streaming mode redaction takes effect immediately.
         reemit_user();
