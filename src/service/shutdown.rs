@@ -1,12 +1,20 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{
+        LazyLock, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, WPARAM},
     System::LibraryLoader::GetModuleHandleW,
     UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, IsWindowVisible, MSG,
-        PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOWNORMAL, TranslateMessage, WINDOW_EX_STYLE,
-        WINDOW_STYLE, WM_DESTROY, WM_ENDSESSION, WM_QUERYENDSESSION, WNDCLASSW,
+        CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowW, GetForegroundWindow,
+        GetMessageW, IsWindowVisible, MSG, PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOWNORMAL,
+        TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_DESTROY, WM_ENDSESSION,
+        WM_QUERYENDSESSION, WNDCLASSW,
     },
 };
 
@@ -20,9 +28,69 @@ use crate::{
     },
 };
 
+/// A taskbar that had to be hidden this many times within [`STUCK_WINDOW`] is considered stuck.
+/// Explorer re-shows a stuck taskbar about every 400 ms, so a stuck one reaches this in ~2 s.
+const STUCK_HIDES: usize = 5;
+const STUCK_WINDOW: Duration = Duration::from_secs(3);
+/// Hides closer together than this belong to the same show (the hide is async).
+const MIN_HIDE_GAP: Duration = Duration::from_millis(150);
+/// The recovery briefly takes the foreground, so never run it more often than this per taskbar.
+const RECOVERY_COOLDOWN: Duration = Duration::from_secs(10);
+/// How long the taskbar keeps the foreground during the recovery.
+const RECOVERY_ACTIVE_TIME: Duration = Duration::from_millis(300);
+
 /// Tracks whether we actually hid the native taskbar, so we only restore it
 /// when it was hidden by us (avoids unnecessary restores on settings changes/shutdown).
 static NATIVE_TASKBAR_HIDDEN: AtomicBool = AtomicBool::new(false);
+
+/// Per taskbar handle, how often it had to be hidden again.
+static RESHOW_TRACKERS: LazyLock<Mutex<HashMap<isize, ReshowTracker>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Detects an auto-hide taskbar that explorer keeps re-showing.
+///
+/// When explorer reveals an auto-hide taskbar without activating it, it only hides it again
+/// by sliding it away once the reveal is over. We hide the window with `SW_HIDE` before that
+/// happens, so explorer can get stuck in its "revealed" state and show the taskbar again on
+/// every auto-hide timer tick, which flickers behind Seelen UI forever.
+#[derive(Debug, Default)]
+struct ReshowTracker {
+    hides: VecDeque<Instant>,
+    last_recovery: Option<Instant>,
+}
+
+impl ReshowTracker {
+    /// Records that the taskbar had to be hidden again. Returns true when it is stuck and a
+    /// recovery is due.
+    fn record_hide(&mut self, now: Instant) -> bool {
+        if self
+            .hides
+            .back()
+            .is_some_and(|last| now.duration_since(*last) < MIN_HIDE_GAP)
+        {
+            return false;
+        }
+        self.hides.push_back(now);
+        while self
+            .hides
+            .front()
+            .is_some_and(|first| now.duration_since(*first) > STUCK_WINDOW)
+        {
+            self.hides.pop_front();
+        }
+
+        if self.hides.len() < STUCK_HIDES
+            || self
+                .last_recovery
+                .is_some_and(|last| now.duration_since(last) < RECOVERY_COOLDOWN)
+        {
+            return false;
+        }
+        self.hides.clear();
+        self.last_recovery = Some(now);
+        true
+    }
+}
 
 pub fn get_taskbars_handles() -> Result<Vec<HWND>> {
     let mut founds = Vec::new();
@@ -46,6 +114,7 @@ pub fn hide_native_taskbar() {
         return;
     }
     std::thread::spawn(|| {
+        let mut stuck = Vec::new();
         match get_taskbars_handles() {
             Ok(handles) => {
                 for attempt in 0..10 {
@@ -66,6 +135,9 @@ pub fn hide_native_taskbar() {
                         }
                         if unsafe { IsWindowVisible(*hwnd) }.as_bool() {
                             let _ = WindowsApi::show_window_async(hwnd.0 as isize, SW_HIDE.0);
+                            if record_hide(*hwnd) && !stuck.contains(hwnd) {
+                                stuck.push(*hwnd);
+                            }
                         }
                     }
                 }
@@ -73,7 +145,55 @@ pub fn hide_native_taskbar() {
             Err(err) => log::error!("Failed to get taskbars handles: {err:?}"),
         }
         HIDE_PASS_RUNNING.store(false, Ordering::Release);
+
+        // after releasing the pass, so the taskbar keeps being hidden while it is activated
+        for hwnd in stuck {
+            if NATIVE_TASKBAR_HIDDEN.load(Ordering::Acquire) {
+                finish_auto_hide(hwnd);
+            }
+        }
     });
+}
+
+/// Returns true when `hwnd` is stuck being re-shown by explorer and should be recovered.
+fn record_hide(hwnd: HWND) -> bool {
+    let mut trackers = RESHOW_TRACKERS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trackers
+        .entry(hwnd.0 as isize)
+        .or_default()
+        .record_hide(Instant::now())
+}
+
+/// Makes explorer leave the "revealed" state of a stuck auto-hide taskbar.
+///
+/// Explorer always finishes the auto-hide cycle when the taskbar loses activation, so this
+/// activates the taskbar for a moment and then gives the foreground back to the window that
+/// had it (or the desktop).
+fn finish_auto_hide(taskbar: HWND) {
+    log::warn!(
+        "Native taskbar {taskbar:?} keeps being re-shown by explorer, resetting its auto-hide"
+    );
+    let previous = unsafe { GetForegroundWindow() };
+    if let Err(err) = WindowsApi::set_foreground(taskbar.0 as isize) {
+        log::error!("Failed to activate the native taskbar: {err:?}");
+        return;
+    }
+    std::thread::sleep(RECOVERY_ACTIVE_TIME);
+
+    let back = if previous.is_invalid() || previous == taskbar {
+        let progman = WindowsString::from_str("Progman");
+        unsafe { FindWindowW(progman.as_pcwstr(), None) }.unwrap_or_default()
+    } else {
+        previous
+    };
+    if back.is_invalid() {
+        return;
+    }
+    if let Err(err) = WindowsApi::set_foreground(back.0 as isize) {
+        log::error!("Failed to give the foreground back after resetting the taskbar: {err:?}");
+    }
 }
 
 pub fn restore_native_taskbar() -> Result<()> {
@@ -173,4 +293,57 @@ pub fn start_shutdown_listener() -> Result<()> {
         })?;
     rx.recv()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RESHOW_PERIOD: Duration = Duration::from_millis(400);
+
+    #[test]
+    fn occasional_shows_are_not_stuck() {
+        let mut tracker = ReshowTracker::default();
+        let start = Instant::now();
+        for i in 0..20 {
+            assert!(!tracker.record_hide(start + Duration::from_secs(i)));
+        }
+    }
+
+    #[test]
+    fn repeated_hides_of_the_same_show_count_once() {
+        // the async hide can take a couple of 50 ms attempts to land for one show
+        let mut tracker = ReshowTracker::default();
+        let start = Instant::now();
+        for show in 0..10u64 {
+            for attempt in 0..3u64 {
+                let at = start + Duration::from_millis(show * 1000 + attempt * 50);
+                assert!(!tracker.record_hide(at));
+            }
+        }
+    }
+
+    #[test]
+    fn explorer_reshow_loop_is_stuck_and_recovery_has_cooldown() {
+        let mut tracker = ReshowTracker::default();
+        let start = Instant::now();
+        let at = |n: u32| start + RESHOW_PERIOD * n;
+
+        for n in 0..(STUCK_HIDES as u32 - 1) {
+            assert!(!tracker.record_hide(at(n)));
+        }
+        assert!(tracker.record_hide(at(STUCK_HIDES as u32 - 1)));
+
+        // still looping right after the recovery: wait for the cooldown
+        let cooldown_hides = (RECOVERY_COOLDOWN.as_millis() / RESHOW_PERIOD.as_millis()) as u32;
+        let mut recovered_again = None;
+        for n in STUCK_HIDES as u32..STUCK_HIDES as u32 + cooldown_hides + STUCK_HIDES as u32 {
+            if tracker.record_hide(at(n)) {
+                recovered_again = Some(n);
+                break;
+            }
+        }
+        let n = recovered_again.expect("a still stuck taskbar must be recovered again");
+        assert!(RESHOW_PERIOD * (n - (STUCK_HIDES as u32 - 1)) >= RECOVERY_COOLDOWN);
+    }
 }
