@@ -1,0 +1,41 @@
+name: Sync fork with upstream
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # Daily at 06:00 UTC
+  workflow_dispatch:      # Manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Sync upstream/master into fork master
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/eythaann/Seelen-UI.git
+          git remote -v
+
+      - name: Fetch upstream
+        run: git fetch upstream master
+
+      - name: Sync upstream into fork (ff-only)
+        run: |
+          # Fast-forward only: never create merge commits, never force-push.
+          # Fails loudly if the fork has diverged from upstream.
+          git merge --ff-only upstream/master
+          git push origin master
