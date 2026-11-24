@@ -545,6 +545,10 @@ slu_commands_declaration! {
     NotificationsCloseAll =
         @fallible()
         notifications_close_all(),
+    // Opens Windows' own notification center, or closes it when open (Windows 10).
+    ToggleNativeNotificationCenter =
+        @fallible()
+        toggle_native_notification_center(),
     ActivateNotification =
         @fallible()
         activate_notification(

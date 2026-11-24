@@ -36,6 +36,8 @@ pub enum WindowEvent {
     Hidden,
     /// Stopped being hidden by the compositor (see [`Window::is_cloaked`]).
     Uncloaked,
+    /// Started being hidden by the compositor (see [`Window::is_cloaked`]).
+    Cloaked,
     /// Became the foreground (active) window.
     Foregrounded,
     /// Received the keyboard focus.
