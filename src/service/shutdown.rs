@@ -58,51 +58,6 @@ const HIDE_PASS_DELAYS_MS: [u64; 14] =
 static RESHOW_TRACKERS: LazyLock<Mutex<HashMap<isize, ReshowTracker>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Detects an auto-hide taskbar that explorer keeps re-showing.
-///
-/// When explorer reveals an auto-hide taskbar without activating it, it only hides it again
-/// by sliding it away once the reveal is over. We hide the window with `SW_HIDE` before that
-/// happens, so explorer can get stuck in its "revealed" state and show the taskbar again on
-/// every auto-hide timer tick, which flickers behind Seelen UI forever.
-#[derive(Debug, Default)]
-struct ReshowTracker {
-    hides: VecDeque<Instant>,
-    last_recovery: Option<Instant>,
-}
-
-impl ReshowTracker {
-    /// Records that the taskbar had to be hidden again. Returns true when it is stuck and a
-    /// recovery is due.
-    fn record_hide(&mut self, now: Instant) -> bool {
-        if self
-            .hides
-            .back()
-            .is_some_and(|last| now.duration_since(*last) < MIN_HIDE_GAP)
-        {
-            return false;
-        }
-        self.hides.push_back(now);
-        while self
-            .hides
-            .front()
-            .is_some_and(|first| now.duration_since(*first) > STUCK_WINDOW)
-        {
-            self.hides.pop_front();
-        }
-
-        if self.hides.len() < STUCK_HIDES
-            || self
-                .last_recovery
-                .is_some_and(|last| now.duration_since(last) < RECOVERY_COOLDOWN)
-        {
-            return false;
-        }
-        self.hides.clear();
-        self.last_recovery = Some(now);
-        true
-    }
-}
-
 pub fn get_taskbars_handles() -> Result<Vec<HWND>> {
     let mut founds = Vec::new();
     WindowEnumerator::new().for_each(|hwnd| {
