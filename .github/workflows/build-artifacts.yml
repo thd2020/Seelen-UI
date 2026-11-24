@@ -22,15 +22,20 @@ jobs:
         uses: ./.github/actions/setup
         with:
           rust-components: rustfmt
+          rust-targets: x86_64-pc-windows-msvc
+          cache-key-prefix: release-artifacts-x64
 
       - name: Install frontend dependencies
         run: npm install
+
+      - name: Build hook DLL
+        run: cargo build --release --target x86_64-pc-windows-msvc -p sluhk
 
       - name: Build tauri release binaries (no bundle)
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npx tauri build --ci --verbose --no-bundle
+        run: npx tauri build --ci --verbose --no-bundle --target x86_64-pc-windows-msvc
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -41,4 +46,4 @@ jobs:
             target/x86_64-pc-windows-msvc/release/*.dll
             target/x86_64-pc-windows-msvc/release/SHA256SUMS
             target/x86_64-pc-windows-msvc/release/SHA256SUMS.sig
-          if-no-files-found: warn
+          if-no-files-found: error
