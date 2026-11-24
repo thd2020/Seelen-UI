@@ -42,9 +42,6 @@ impl SeelenWeg {
                 // Wait for the show event too: on create, explorer is still setting the
                 // taskbar up, and changing its app bar state then can crash explorer.
                 if TASKBAR_CLASS.contains(&class.as_str()) {
-                    if event == EVENT_OBJECT_SHOW {
-                        Self::hide_native_taskbar();
-                    }
                     return Ok(());
                 }
 

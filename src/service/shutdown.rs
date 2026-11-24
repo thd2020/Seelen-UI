@@ -96,18 +96,16 @@ fn run_hide_pass() {
             continue;
         }
 
-        // ABM_SETSTATE makes explorer re-run its auto-hide logic and show the taskbar again,
-        // which fires a new show event and so a new hide request. On Windows 10 21H2 that code
-        // path can also crash explorer, so only send it when the state really has to change.
-        // The auto-hide state is shared by all the taskbars, it belongs to the primary one.
+        // Hiding is done purely with SW_HIDE + AlwaysOnTop state: the taskbar
+        // stays completely hidden instead of showing as a thin strip on hover
+        // (AutoHide), and there's no feedback loop since raw_events.rs no longer
+        // re-triggers hide on every taskbar show event.
         let primary = handles
             .iter()
             .find(|hwnd| WindowsApi::get_class(**hwnd) == "Shell_TrayWnd")
             .unwrap_or(&handles[0]);
         let app_bar = AppBarData::from_handle(*primary);
-        if !app_bar.is_auto_hide() {
-            app_bar.set_state(AppBarDataState::AutoHide);
-        }
+        app_bar.set_state(AppBarDataState::AlwaysOnTop);
 
         // Explorer keeps a focused taskbar shown, so move the focus to the desktop first.
         // Only once per pass, as it can fall back to simulating an alt tap.
