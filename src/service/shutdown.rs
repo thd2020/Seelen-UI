@@ -42,6 +42,17 @@ const RECOVERY_ACTIVE_TIME: Duration = Duration::from_millis(300);
 /// Tracks whether we actually hid the native taskbar, so we only restore it
 /// when it was hidden by us (avoids unnecessary restores on settings changes/shutdown).
 static NATIVE_TASKBAR_HIDDEN: AtomicBool = AtomicBool::new(false);
+/// Set by every hide request and consumed by the worker before each pass, so a request
+/// that arrives while a pass is running is never lost: it schedules one more pass.
+static HIDE_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// Only one worker thread runs hide passes at a time.
+static HIDE_WORKER_RUNNING: AtomicBool = AtomicBool::new(false);
+/// Delay before each check of a hide pass. The first checks are close together because explorer
+/// usually re-shows the taskbar right after it is hidden; the last ones are spaced out to catch it
+/// re-showing later (after its own startup, display changes, etc.). Checks are cheap: they only
+/// act on taskbars that are visible or not auto-hide yet.
+const HIDE_PASS_DELAYS_MS: [u64; 14] =
+    [0, 50, 50, 50, 50, 50, 50, 50, 50, 50, 250, 500, 1000, 2000];
 
 /// Per taskbar handle, how often it had to be hidden again.
 static RESHOW_TRACKERS: LazyLock<Mutex<HashMap<isize, ReshowTracker>>> =
@@ -109,90 +120,88 @@ pub fn get_taskbars_handles() -> Result<Vec<HWND>> {
 static HIDE_PASS_RUNNING: AtomicBool = AtomicBool::new(false);
 
 pub fn hide_native_taskbar() {
-    NATIVE_TASKBAR_HIDDEN.store(true, Ordering::Release);
-    if HIDE_PASS_RUNNING.swap(true, Ordering::AcqRel) {
+    NATIVE_TASKBAR_HIDDEN.store(true, Ordering::SeqCst);
+    HIDE_REQUESTED.store(true, Ordering::SeqCst);
+    if HIDE_WORKER_RUNNING.swap(true, Ordering::SeqCst) {
+        // the running worker will see HIDE_REQUESTED and run another pass
         return;
     }
     std::thread::spawn(|| {
-        let mut stuck = Vec::new();
-        match get_taskbars_handles() {
-            Ok(handles) => {
-                for attempt in 0..10 {
-                    if attempt > 0 {
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                    }
-                    if !NATIVE_TASKBAR_HIDDEN.load(Ordering::Acquire) {
-                        continue;
-                    }
-                    for hwnd in &handles {
-                        let app_bar = AppBarData::from_handle(*hwnd);
-                        // ABM_SETSTATE makes explorer re-run its auto-hide logic and show the
-                        // taskbar again, which fires a new show event and so a new hide request.
-                        // On Windows 10 21H2 that code path can also crash explorer, so only
-                        // send it when the state really has to change.
-                        if !app_bar.is_auto_hide() {
-                            app_bar.set_state(AppBarDataState::AutoHide);
-                        }
-                        if unsafe { IsWindowVisible(*hwnd) }.as_bool() {
-                            let _ = WindowsApi::show_window_async(hwnd.0 as isize, SW_HIDE.0);
-                            if record_hide(*hwnd) && !stuck.contains(hwnd) {
-                                stuck.push(*hwnd);
-                            }
-                        }
-                    }
-                }
+        loop {
+            while HIDE_REQUESTED.swap(false, Ordering::SeqCst) {
+                run_hide_pass();
             }
-            Err(err) => log::error!("Failed to get taskbars handles: {err:?}"),
-        }
-        HIDE_PASS_RUNNING.store(false, Ordering::Release);
-
-        // after releasing the pass, so the taskbar keeps being hidden while it is activated
-        for hwnd in stuck {
-            if NATIVE_TASKBAR_HIDDEN.load(Ordering::Acquire) {
-                finish_auto_hide(hwnd);
+            HIDE_WORKER_RUNNING.store(false, Ordering::SeqCst);
+            // A request may have arrived after the last swap but before releasing the worker
+            // flag; its caller saw the worker as running and returned, so pick it up here
+            // unless another worker already did.
+            if !HIDE_REQUESTED.load(Ordering::SeqCst)
+                || HIDE_WORKER_RUNNING.swap(true, Ordering::SeqCst)
+            {
+                break;
             }
         }
     });
 }
 
-/// Returns true when `hwnd` is stuck being re-shown by explorer and should be recovered.
-fn record_hide(hwnd: HWND) -> bool {
-    let mut trackers = RESHOW_TRACKERS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    trackers
-        .entry(hwnd.0 as isize)
-        .or_default()
-        .record_hide(Instant::now())
-}
+fn run_hide_pass() {
+    let mut focus_moved = false;
+    for delay in HIDE_PASS_DELAYS_MS {
+        if delay > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+        }
+        if !NATIVE_TASKBAR_HIDDEN.load(Ordering::SeqCst) {
+            // restored meanwhile; a later hide request schedules a new pass
+            return;
+        }
+        // Enumerated on every check: taskbars can be created (explorer restart, new monitor)
+        // or destroyed while a pass is running.
+        let handles = match get_taskbars_handles() {
+            Ok(handles) => handles,
+            Err(err) => {
+                log::error!("Failed to get taskbars handles: {err:?}");
+                continue;
+            }
+        };
+        if handles.is_empty() {
+            continue;
+        }
 
-/// Makes explorer leave the "revealed" state of a stuck auto-hide taskbar.
-///
-/// Explorer always finishes the auto-hide cycle when the taskbar loses activation, so this
-/// activates the taskbar for a moment and then gives the foreground back to the window that
-/// had it (or the desktop).
-fn finish_auto_hide(taskbar: HWND) {
-    log::warn!(
-        "Native taskbar {taskbar:?} keeps being re-shown by explorer, resetting its auto-hide"
-    );
-    let previous = unsafe { GetForegroundWindow() };
-    if let Err(err) = WindowsApi::set_foreground(taskbar.0 as isize) {
-        log::error!("Failed to activate the native taskbar: {err:?}");
-        return;
-    }
-    std::thread::sleep(RECOVERY_ACTIVE_TIME);
+        // Hiding is done purely with SW_HIDE + AlwaysOnTop state: the taskbar
+        // stays completely hidden instead of showing as a thin strip on hover
+        // (AutoHide), and there's no feedback loop since raw_events.rs no longer
+        // re-triggers hide on every taskbar show event.
+        let primary = handles
+            .iter()
+            .find(|hwnd| WindowsApi::get_class(**hwnd) == "Shell_TrayWnd")
+            .unwrap_or(&handles[0]);
+        let app_bar = AppBarData::from_handle(*primary);
+        app_bar.set_state(AppBarDataState::AlwaysOnTop);
 
-    let back = if previous.is_invalid() || previous == taskbar {
-        let progman = WindowsString::from_str("Progman");
-        unsafe { FindWindowW(progman.as_pcwstr(), None) }.unwrap_or_default()
-    } else {
-        previous
-    };
-    if back.is_invalid() {
-        return;
-    }
-    if let Err(err) = WindowsApi::set_foreground(back.0 as isize) {
-        log::error!("Failed to give the foreground back after resetting the taskbar: {err:?}");
+        // Explorer keeps a focused taskbar shown, so move the focus to the desktop first.
+        // Only once per pass, as it can fall back to simulating an alt tap.
+        let foreground = WindowsApi::get_foreground_window();
+        if !focus_moved && handles.contains(&foreground) {
+            focus_moved = true;
+            let desktop = WindowsApi::get_shell_window();
+            if !desktop.is_invalid() {
+                log::debug!("Native taskbar is focused, moving the focus to the desktop");
+                if let Err(err) = WindowsApi::set_foreground(desktop.0 as isize) {
+                    log::warn!("Failed to move the focus out of the native taskbar: {err:?}");
+                }
+            }
+        }
+
+        // moving the focus can take a while, don't hide a taskbar restored meanwhile
+        if !NATIVE_TASKBAR_HIDDEN.load(Ordering::SeqCst) {
+            return;
+        }
+        for hwnd in &handles {
+            if WindowsApi::is_window_visible(*hwnd) {
+                log::debug!("Hiding visible native taskbar {:?}", hwnd.0);
+                let _ = WindowsApi::show_window_async(hwnd.0 as isize, SW_HIDE.0);
+            }
+        }
     }
 }
 
