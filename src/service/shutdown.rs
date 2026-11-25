@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     sync::{
-        LazyLock, Mutex,
+        Condvar, LazyLock, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -41,11 +41,9 @@ const RECOVERY_ACTIVE_TIME: Duration = Duration::from_millis(300);
 /// Tracks whether we actually hid the native taskbar, so we only restore it
 /// when it was hidden by us (avoids unnecessary restores on settings changes/shutdown).
 static NATIVE_TASKBAR_HIDDEN: AtomicBool = AtomicBool::new(false);
-/// Set by every hide request and consumed by the worker before each pass, so a request
-/// that arrives while a pass is running is never lost: it schedules one more pass.
-static HIDE_REQUESTED: AtomicBool = AtomicBool::new(false);
-/// Only one worker thread runs hide passes at a time.
-static HIDE_WORKER_RUNNING: AtomicBool = AtomicBool::new(false);
+/// Signals the hide worker to wake immediately on a new hide or restore request.
+static HIDE_SIGNAL: LazyLock<(Mutex<HideWorkerState>, Condvar)> =
+    LazyLock::new(|| (Mutex::new(HideWorkerState::default()), Condvar::new()));
 /// Delay before each check of a hide pass. The first checks are close together because explorer
 /// usually re-shows the taskbar right after it is hidden; the last ones are spaced out to catch it
 /// re-showing later (after its own startup, display changes, etc.). Checks are cheap: they only
@@ -56,6 +54,12 @@ const HIDE_PASS_DELAYS_MS: [u64; 14] =
 /// Per taskbar handle, how often it had to be hidden again.
 static RESHOW_TRACKERS: LazyLock<Mutex<HashMap<isize, ReshowTracker>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Debug, Default)]
+struct HideWorkerState {
+    requested: bool,
+    running: bool,
+}
 
 /// Detects an auto-hide taskbar that explorer keeps re-showing.
 ///
@@ -117,51 +121,61 @@ pub fn get_taskbars_handles() -> Result<Vec<HWND>> {
 
 pub fn hide_native_taskbar() {
     NATIVE_TASKBAR_HIDDEN.store(true, Ordering::SeqCst);
-    HIDE_REQUESTED.store(true, Ordering::SeqCst);
-    if HIDE_WORKER_RUNNING.swap(true, Ordering::SeqCst) {
-        // the running worker will see HIDE_REQUESTED and run another pass
+    let (lock, cvar) = &*HIDE_SIGNAL;
+    let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.requested = true;
+    cvar.notify_one();
+    if state.running {
         return;
     }
-    std::thread::spawn(|| {
-        let mut stuck = Vec::new();
-        loop {
-            while HIDE_REQUESTED.swap(false, Ordering::SeqCst) {
-                for hwnd in run_hide_pass() {
-                    if !stuck.contains(&hwnd) {
-                        stuck.push(hwnd);
-                    }
-                }
-            }
-            HIDE_WORKER_RUNNING.store(false, Ordering::SeqCst);
-            // A request may have arrived after the last swap but before releasing the worker
-            // flag; its caller saw the worker as running and returned, so pick it up here
-            // unless another worker already did.
-            if !HIDE_REQUESTED.load(Ordering::SeqCst)
-                || HIDE_WORKER_RUNNING.swap(true, Ordering::SeqCst)
-            {
-                break;
-            }
-        }
-
-        // after releasing the worker, so the taskbar keeps being hidden while it is activated
-        for hwnd in stuck {
-            if NATIVE_TASKBAR_HIDDEN.load(Ordering::SeqCst) {
-                finish_auto_hide(hwnd);
-            }
-        }
-    });
+    state.running = true;
+    drop(state);
+    std::thread::spawn(run_hide_worker);
 }
 
-fn run_hide_pass() -> Vec<HWND> {
-    let mut stuck = Vec::new();
+fn run_hide_worker() {
+    let (lock, _) = &*HIDE_SIGNAL;
+    loop {
+        {
+            let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if !state.requested || !NATIVE_TASKBAR_HIDDEN.load(Ordering::SeqCst) {
+                state.requested = false;
+                state.running = false;
+                return;
+            }
+            state.requested = false;
+        }
+        run_hide_pass();
+    }
+}
+
+fn run_hide_pass() {
+    let (lock, cvar) = &*HIDE_SIGNAL;
     let mut focus_moved = false;
-    for delay in HIDE_PASS_DELAYS_MS {
+    let mut idx = 0;
+    while idx < HIDE_PASS_DELAYS_MS.len() {
+        let delay = HIDE_PASS_DELAYS_MS[idx];
         if delay > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(delay));
+            let state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let (mut state, _) = cvar
+                .wait_timeout_while(state, Duration::from_millis(delay), |s| {
+                    !s.requested && NATIVE_TASKBAR_HIDDEN.load(Ordering::SeqCst)
+                })
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if !NATIVE_TASKBAR_HIDDEN.load(Ordering::SeqCst) {
+                // restored meanwhile; a later hide request schedules a new pass
+                return;
+            }
+            if state.requested {
+                state.requested = false;
+                drop(state);
+                idx = 0;
+                focus_moved = false;
+                continue;
+            }
         }
         if !NATIVE_TASKBAR_HIDDEN.load(Ordering::SeqCst) {
-            // restored meanwhile; a later hide request schedules a new pass
-            return stuck;
+            return;
         }
         // Enumerated on every check: taskbars can be created (explorer restart, new monitor)
         // or destroyed while a pass is running.
@@ -169,10 +183,12 @@ fn run_hide_pass() -> Vec<HWND> {
             Ok(handles) => handles,
             Err(err) => {
                 log::error!("Failed to get taskbars handles: {err:?}");
+                idx += 1;
                 continue;
             }
         };
         if handles.is_empty() {
+            idx += 1;
             continue;
         }
 
@@ -205,19 +221,36 @@ fn run_hide_pass() -> Vec<HWND> {
 
         // moving the focus can take a while, don't hide a taskbar restored meanwhile
         if !NATIVE_TASKBAR_HIDDEN.load(Ordering::SeqCst) {
-            return stuck;
+            return;
         }
+        let mut stuck_now = Vec::new();
         for hwnd in &handles {
             if WindowsApi::is_window_visible(*hwnd) {
                 log::debug!("Hiding visible native taskbar {:?}", hwnd.0);
                 let _ = WindowsApi::show_window_async(hwnd.0 as isize, SW_HIDE.0);
-                if record_hide(*hwnd) && !stuck.contains(hwnd) {
-                    stuck.push(*hwnd);
+                if record_hide(*hwnd) && !stuck_now.contains(hwnd) {
+                    stuck_now.push(*hwnd);
                 }
             }
         }
+
+        // Recover immediately so continuous re-show requests never starve auto-hide reset.
+        if !stuck_now.is_empty() && NATIVE_TASKBAR_HIDDEN.load(Ordering::SeqCst) {
+            for hwnd in stuck_now {
+                if !NATIVE_TASKBAR_HIDDEN.load(Ordering::SeqCst) {
+                    return;
+                }
+                finish_auto_hide(hwnd);
+                if NATIVE_TASKBAR_HIDDEN.load(Ordering::SeqCst) {
+                    let _ = WindowsApi::show_window_async(hwnd.0 as isize, SW_HIDE.0);
+                }
+            }
+            idx = 0;
+            focus_moved = false;
+            continue;
+        }
+        idx += 1;
     }
-    stuck
 }
 
 /// Returns true when `hwnd` is stuck being re-shown by explorer and should be recovered.
@@ -267,6 +300,7 @@ pub fn restore_native_taskbar() -> Result<()> {
     {
         return Ok(());
     }
+    HIDE_SIGNAL.1.notify_one();
 
     for hwnd in get_taskbars_handles()? {
         AppBarData::from_handle(hwnd).set_state(AppBarDataState::AlwaysOnTop);
