@@ -6,6 +6,7 @@ pub mod messages;
 pub mod notification_center;
 pub mod security;
 pub mod service;
+pub mod taskbar_guard;
 
 // Re-export main types for convenience
 pub use app::AppIpc;

@@ -1,4 +1,5 @@
 mod notification_center;
+mod taskbar_guard;
 
 use slu_ipc::{
     AppIpc,
