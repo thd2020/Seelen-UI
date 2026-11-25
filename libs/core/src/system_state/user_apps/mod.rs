@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use super::Color;
 use crate::{
     rect::Rect,
-    system_state::{BadgeValue, MonitorId},
+    system_state::{BadgeValue, MonitorId, WindowIdentity},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,8 +20,8 @@ pub enum ZOrder {
 #[cfg_attr(all(feature = "gen-binds", not(feature = "salvo")), derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct FocusedApp {
-    pub hwnd: isize,
-    pub owner_hwnd: isize,
+    pub hwnd: WindowIdentity,
+    pub owner_hwnd: WindowIdentity,
     pub monitor: MonitorId,
     pub title: String,
     pub class: String,
@@ -38,7 +38,7 @@ pub struct FocusedApp {
 #[cfg_attr(all(feature = "gen-binds", not(feature = "salvo")), derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct UserAppWindow {
-    pub hwnd: isize,
+    pub hwnd: WindowIdentity,
     pub monitor: MonitorId,
     pub title: String,
     pub app_name: String,
@@ -104,6 +104,29 @@ pub struct UserAppWindowPreview {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(all(feature = "gen-binds", not(feature = "salvo")), derive(ts_rs::TS))]
+#[cfg_attr(all(feature = "gen-binds", not(feature = "salvo")), ts(export))]
+pub struct WindowPreviewTarget {
+    pub hwnd: WindowIdentity,
+    /// Full layout rectangle, in physical pixels relative to the destination client area.
+    pub rect: Rect,
+    /// Visible destination bounds. Keep `rect` intact so clipping preserves source alignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(all(feature = "gen-binds", not(feature = "salvo")), ts(optional))]
+    pub clip: Option<Rect>,
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+#[cfg_attr(all(feature = "gen-binds", not(feature = "salvo")), derive(ts_rs::TS))]
+#[cfg_attr(all(feature = "gen-binds", not(feature = "salvo")), ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct LiveWindowPreviewState {
+    pub live: Vec<WindowIdentity>,
+    /// `false` when the destination popup is hidden: no surface is kept for it.
+    pub visible: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(all(feature = "gen-binds", not(feature = "salvo")), derive(ts_rs::TS))]
 pub struct UserAppWindowColors {
     pub top: Vec<Color>,
     pub bottom: Vec<Color>,
@@ -140,5 +163,29 @@ impl std::fmt::Display for RelaunchArguments {
             RelaunchArguments::Array(args) => args.join(" ").trim().to_owned(),
         };
         write!(f, "{}", args)
+    }
+}
+
+#[cfg(test)]
+mod preview_target_tests {
+    use super::*;
+
+    #[test]
+    fn clipping_is_optional_and_preserves_the_full_layout_rectangle() {
+        let legacy = serde_json::json!({"hwnd": "11_0_0", "rect": {"left": 0, "top": -50, "right": 200, "bottom": 50}});
+        let mut target: WindowPreviewTarget = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(target.clip.is_none());
+        assert_eq!(serde_json::to_value(&target).unwrap(), legacy);
+        target.clip = Some(Rect {
+            left: 0,
+            top: 0,
+            right: 200,
+            bottom: 50,
+        });
+        let encoded = serde_json::to_value(&target).unwrap();
+        assert_eq!(encoded["rect"], legacy["rect"]);
+        let decoded: WindowPreviewTarget = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.clip.unwrap().top, 0);
+        assert_eq!(decoded.rect.top, -50);
     }
 }

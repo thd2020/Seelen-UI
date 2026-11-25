@@ -201,7 +201,7 @@ impl Shared {
             }
             WindowEvent::Destroyed => {
                 if let Some(injection) = self.injection.lock().as_mut() {
-                    injection.forget(window.address());
+                    injection.forget(window.handle());
                 }
             }
             _ => {}
@@ -229,7 +229,7 @@ impl Shared {
             let Some(injection) = injection.as_mut() else {
                 return;
             };
-            match injection.track(window.address()) {
+            match injection.track(window.handle()) {
                 Ok(newly) => newly,
                 Err(err) => {
                     log::error!("Can't hook the notification host: {err}");
@@ -239,10 +239,10 @@ impl Shared {
             }
         };
         // never wait on the host while holding the lock
-        if newly && !send(window.address(), &Messages::get().attach, generation) {
+        if newly && !send(window.handle(), &Messages::get().attach, generation) {
             log::warn!("The notification host didn't take the attach message");
             if let Some(injection) = self.injection.lock().as_mut() {
-                injection.forget(window.address());
+                injection.forget(window.handle());
             }
         }
     }

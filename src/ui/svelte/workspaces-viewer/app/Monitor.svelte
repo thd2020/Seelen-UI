@@ -11,7 +11,7 @@
   import { createDragDropManager } from "libs/ui/dnd";
   import { monitors } from "libs/ui/svelte/runes/monitors.svelte.ts";
 
-  const { monitor } = $props<{ monitor: PhysicalMonitor }>();
+  const { monitor }: { monitor: PhysicalMonitor } = $props();
 
   // Workaround for https://github.com/clauderic/dnd-kit/issues/2112
   const manager = createDragDropManager();
@@ -52,7 +52,7 @@
   onDragEnd={(event) => {
     const { source, target } = event.operation;
     if (!source || !target) return;
-    const hwnd = source.id as number;
+    const hwnd = source.id as string;
     const workspaceId = target.id as string;
     if (viewingWorkspaceId === workspaceId) return;
     invoke(SeelenCommand.MoveWindowToWorkspace, { hwnd, workspaceId });
@@ -114,7 +114,7 @@
 
     <DragOverlay dropAnimation={null}>
       {#snippet children(source)}
-        <Window hwnd={source.id as number} overlay />
+        <Window hwnd={source.id as string} overlay />
       {/snippet}
     </DragOverlay>
   </div>

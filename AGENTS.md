@@ -23,6 +23,15 @@ Translations:
 - NEVER touch non-English i18n files (no adding, editing, translating or deleting keys). Only edit `en` entries /
   `en.yml`; every other language is handled exclusively by `npm run translate`.
 
+Backward compatibility:
+
+- NEVER introduce nor recommend breaking changes to the app's API: serialized types (`libs/core` types, TS bindings),
+  commands, events, settings/resource files and stored state (e.g. renaming or removing fields, changing a field type in
+  an incompatible way). Prefer compatible alternatives: keep the field name, `#[serde(alias)]`, or accept the old format
+  on deserialization and upgrade it on the next save.
+- If a breaking change is truly unavoidable, keep it minimal and document it under `### breaking changes` in
+  `changelog.md`.
+
 Rust locking order (avoid deadlocks):
 
 1. CLI locks
@@ -494,6 +503,10 @@ pub enum Action {
 
 - Prefer quick feedback loops (`cargo check`, `npm run type-check`, `deno lint`).
 - Keep changes scoped; add tests when behavior changes.
+- Automated tests must never require the system GUI: no real windows, DWM, focus/foreground, Z-order, input, monitors or
+  an interactive desktop (no `CreateWindowExW` fixtures, no `#[ignore]`d "interactive desktop" tests). Test only the
+  pure logic (extract it from the OS calls if needed). Anything that needs the system GUI is verified manually by
+  QA/testers: list those scenarios in the PR description instead of writing a test.
 - Runtime logs can be read directly (no need to ask the user for them):
   `%LOCALAPPDATA%\com.seelen.seelen-ui\logs\Seelen UI.log` (service: `SLU Service.log` in the same folder; previous
   session in `*.log.bak`).

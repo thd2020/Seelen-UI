@@ -52,8 +52,8 @@ use windows::{
             PHYSICAL_MONITOR,
         },
         Foundation::{
-            GetLastError, HANDLE, HMODULE, HWND, LPARAM, LUID, POINT, RECT, STATUS_SUCCESS,
-            SetLastError, WIN32_ERROR, WPARAM,
+            FILETIME, GetLastError, HANDLE, HMODULE, HWND, LPARAM, LUID, POINT, RECT,
+            STATUS_SUCCESS, SetLastError, WIN32_ERROR, WPARAM,
         },
         Graphics::{
             Dwm::{
@@ -96,8 +96,8 @@ use windows::{
             SystemInformation::{COMPUTER_NAME_FORMAT, GetComputerNameExW},
             Threading::{
                 AttachThreadInput, GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId,
-                OpenProcess, OpenProcessToken, PROCESS_ACCESS_RIGHTS, PROCESS_NAME_WIN32,
-                PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+                GetProcessTimes, OpenProcess, OpenProcessToken, PROCESS_ACCESS_RIGHTS,
+                PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
             },
             Variant::VARIANT,
         },
@@ -114,15 +114,15 @@ use windows::{
                 ShellExecuteExW, ShellLink, ShellWindows, VirtualDesktopManager,
             },
             WindowsAndMessaging::{
-                DispatchMessageW, FindWindowExW, GW_OWNER, GWL_EXSTYLE, GWL_STYLE, GetClassNameW,
-                GetDesktopWindow, GetForegroundWindow, GetParent, GetPropW, GetWindow,
-                GetWindowLongW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
-                HWND_BROADCAST, IsIconic, IsWindow, IsWindowVisible, IsZoomed, MSG, PM_REMOVE,
-                PeekMessageW, PostMessageW, SET_WINDOW_POS_FLAGS, SHOW_WINDOW_CMD, SW_SHOWNORMAL,
-                SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-                SendMessageW, SendNotifyMessageW, SetWindowPos, ShowWindow, ShowWindowAsync,
-                TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETTINGCHANGE, WS_SIZEBOX,
-                WS_THICKFRAME,
+                ASFW_ANY, AllowSetForegroundWindow, DispatchMessageW, FindWindowExW, GW_OWNER,
+                GWL_EXSTYLE, GWL_STYLE, GetClassNameW, GetDesktopWindow, GetForegroundWindow,
+                GetParent, GetPropW, GetWindow, GetWindowLongW, GetWindowRect, GetWindowTextW,
+                GetWindowThreadProcessId, HWND_BROADCAST, IsIconic, IsWindow, IsWindowVisible,
+                IsZoomed, MSG, PM_REMOVE, PeekMessageW, PostMessageW, SET_WINDOW_POS_FLAGS,
+                SHOW_WINDOW_CMD, SW_SHOWNORMAL, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE,
+                SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SendNotifyMessageW, SetWindowPos,
+                ShowWindow, ShowWindowAsync, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
+                WM_SETTINGCHANGE, WS_SIZEBOX, WS_THICKFRAME,
             },
         },
     },
@@ -542,8 +542,20 @@ impl WindowsApi {
     }
 
     pub fn is_process_frozen(process_id: u32) -> Result<bool> {
+        let data = Self::process_basic_information(process_id)?;
+        Ok(unsafe { data.Anonymous.Flags } & ProcessInformationFlag::IsFrozen as u32 != 0)
+    }
+
+    /// Id of the process that created `process_id`. It may have exited since, and its id
+    /// may have been reused by another process: compare the creation times to be sure.
+    pub fn parent_process_id(process_id: u32) -> Result<u32> {
+        let data = Self::process_basic_information(process_id)?;
+        Ok(u32::try_from(data.BasicInfo.InheritedFromUniqueProcessId)?)
+    }
+
+    fn process_basic_information(process_id: u32) -> Result<PROCESS_EXTENDED_BASIC_INFORMATION> {
         let handle = Self::open_process(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id)?;
-        let is_frozen = unsafe {
+        unsafe {
             let mut buffer: [PROCESS_EXTENDED_BASIC_INFORMATION; 1] = std::mem::zeroed();
             let status = NtQueryInformationProcess(
                 *handle,
@@ -561,10 +573,8 @@ impl WindowsApi {
                 .into());
             }
 
-            let data = buffer[0];
-            data.Anonymous.Flags & ProcessInformationFlag::IsFrozen as u32 != 0
-        };
-        Ok(is_frozen)
+            Ok(buffer[0])
+        }
     }
 
     /// Falls back to `get_process_path_by_pid` for processes we are not allowed to open.
@@ -580,6 +590,17 @@ impl WindowsApi {
             QueryFullProcessImageNameW(*handle, PROCESS_NAME_WIN32, path.as_pwstr(), &mut 1024)?;
         }
         Ok(path.to_os_string())
+    }
+
+    /// Creation time of the process as a FILETIME (100ns intervals since 1601-01-01 UTC).
+    pub fn process_creation_time(process_id: u32) -> Result<u64> {
+        let handle = Self::open_process(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id)?;
+        let mut creation = FILETIME::default();
+        let mut exit = FILETIME::default();
+        let mut kernel = FILETIME::default();
+        let mut user = FILETIME::default();
+        unsafe { GetProcessTimes(*handle, &mut creation, &mut exit, &mut kernel, &mut user)? };
+        Ok(((creation.dwHighDateTime as u64) << 32) | creation.dwLowDateTime as u64)
     }
 
     pub fn get_class(hwnd: HWND) -> Result<String> {
@@ -1286,6 +1307,11 @@ impl WindowsApi {
         elevated: bool,
     ) -> Result<()> {
         log::trace!("Running: {program:?} with args: {args:?} in working dir: {working_dir:?}");
+        // The app is launched by explorer (or by us as fallback), which doesn't own the
+        // foreground, so Windows' foreground lock would open it behind the focused window.
+        // Hand our foreground rights to whoever claims them next; this only succeeds while we
+        // hold them (e.g. right after a click on the dock or another widget), so failure is fine.
+        let _ = unsafe { AllowSetForegroundWindow(ASFW_ANY) };
         match Self::shell_execute_through_explorer(&program, &args, &working_dir, elevated) {
             Ok(()) => return Ok(()),
             Err(err) => log::error!("Failed to execute through explorer, falling back: {err}"),

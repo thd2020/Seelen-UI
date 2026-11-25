@@ -1,6 +1,21 @@
 # Changelog
 
-## [2.8.11-dev]
+## [2.8.12-dev]
+
+### breaking changes
+
+- all window identifiers (window handles) are now strings instead of numbers. As they are ids, no operations should be
+  done with them, so few consumers should be affected.
+- removed the `get_native_shell_wallpaper` and `set_native_shell_wallpaper` commands, the native wallpaper is now
+  managed internally (see below).
+
+### features
+
+- window manager: the tiling layout is kept across app restarts within the same user session.
+- wallpaper manager: the native Windows wallpaper mirrors the wallpaper shown on the primary monitor (the image itself,
+  or its thumbnail for videos/themed wallpapers, black if none), so system screens like the admin (UAC) prompt match
+  Seelen UI. The user's own wallpaper (or slideshow) is restored when Seelen UI is closed or the wallpaper manager is
+  disabled.
 
 ### enhancements
 
@@ -15,8 +30,30 @@
 
 ### fix
 
+- media popup: mixer only controlling one of the audio sessions of apps playing from several processes (e.g. Discord).
+
+## [2.8.11]
+
+### features
+
+- cli: `slu quit` and `slu restart` commands to gracefully close or restart Seelen UI.
+- dock: live window previews (paused on performance mode, static snapshots are shown instead).
+- dock: hovering an open app shows its window previews without stealing the focus.
+
+### enhancements
+
+- close popup if triggered and already shown.
+- add network adapters to network popup.
+- widgets: popups can be triggered by hover (`TriggerSource`), they don't take focus and hide on cursor out.
+- network popup: Wi-Fi networks already known by the system are shown instantly while the scan runs in background.
+
+### fix
+
+- adding several wallpapers at once only keeping one of them.
+- apps spawning behind windows when launched from dock.
 - explorer crashing on Windows 10 when the dock is enabled, caused by the native taskbar being hidden in an endless
   loop.
+- network popup not scanning Wi-Fi networks on first open or when opened by hover.
 
 ## [2.8.10]
 
