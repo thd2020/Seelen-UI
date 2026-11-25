@@ -3,8 +3,10 @@ name: Continuous Integration
 on:
   pull_request:
     branches:
+      - thd
       - master
   workflow_call:
+  workflow_dispatch:
 
 jobs:
   js-test-and-linter:

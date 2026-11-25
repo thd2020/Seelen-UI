@@ -1,5 +1,9 @@
 # About this fork
 
+> 2026-11-25: Restored the `thd` (fork default) and `master` (pure upstream mirror) branch split, gated
+> `fork-release.yml` on CI, removed upstream-only release/store workflows, and fixed `sync-upstream.yml` to fast-forward
+> `master` cleanly.
+
 This is my build of [Seelen UI](https://github.com/eythaann/Seelen-UI) with fixes and features upstream doesn't have
 yet, or doesn't want.
 
@@ -17,8 +21,13 @@ yet, or doesn't want.
   `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. A release build checks its own files against
   this key, so a build signed with upstream's key, or one without a key, won't start.
 - The updater reads this fork's latest release instead of upstream's, so upstream releases never replace this build.
-- `.github/workflows/fork-release.yml` builds the x64 installer on every push to `thd` and publishes it as the latest
-  release, versioned as upstream's version plus `-thd.<run number>`. Installed copies update from there.
+- Workflows on `thd` are trimmed to the three this fork uses:
+  - `.github/workflows/ci.yml` runs JS/TS/Deno and Rust format, lint, type-check, and unit tests on PRs and on demand.
+  - `.github/workflows/fork-release.yml` runs `ci.yml`, then builds the x64 NSIS installer on every non-doc/non-extras
+    push to `thd` and publishes it as the latest release, versioned as upstream's version plus `-thd.<run number>`.
+    Installed copies update from there.
+  - `.github/workflows/sync-upstream.yml` fast-forwards `master` to `upstream/master` daily at 06:00 UTC (and on manual
+    dispatch) without creating merge commits.
 
 ## Extras
 

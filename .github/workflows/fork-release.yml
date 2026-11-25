@@ -6,6 +6,10 @@ name: Fork release
 on:
   push:
     branches: [thd]
+    paths-ignore:
+      - "**.md"
+      - "documentation/**"
+      - "extras/**"
   workflow_dispatch:
 
 permissions:
@@ -16,7 +20,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  continuous-integration:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: continuous-integration
     runs-on: windows-2025
     env:
       TARGET: x86_64-pc-windows-msvc
