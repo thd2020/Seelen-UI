@@ -7,6 +7,7 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     path::{Path, PathBuf},
     sync::{LazyLock, mpsc},
+    time::Duration,
 };
 
 use slu_ipc::taskbar_guard::{ATTACH_MESSAGE, DETACH_MESSAGE, HOOK_PROC};
@@ -27,7 +28,9 @@ use crate::{error::Result, utils::constants::SEELEN_COMMON, windows_api::Windows
 
 const DLL_NAME: &str = "sluhk.dll";
 const DLL_FOLDER: &str = "taskbar-guard";
-const SEND_TIMEOUT_MS: u32 = 500;
+const SEND_TIMEOUT_MS: u32 = 1500;
+const MAX_ATTACH_RETRIES: u32 = 5;
+const ATTACH_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 static GUARD_TX: LazyLock<mpsc::Sender<GuardCommand>> = LazyLock::new(|| {
     let (tx, rx) = mpsc::channel();
@@ -163,13 +166,37 @@ pub fn detach_taskbar_guard() {
 fn run_worker(rx: mpsc::Receiver<GuardCommand>) {
     let mut injection: Option<Injection> = None;
     let mut load_logged_err = false;
-    while let Ok(cmd) = rx.recv() {
+    let mut retries_left = 0u32;
+    loop {
+        let cmd = if retries_left > 0 {
+            match rx.recv_timeout(ATTACH_RETRY_DELAY) {
+                Ok(cmd) => cmd,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    retries_left -= 1;
+                    if attach_all(&mut injection, &mut load_logged_err) {
+                        retries_left = 0;
+                    }
+                    continue;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        } else {
+            let Ok(cmd) = rx.recv() else {
+                break;
+            };
+            cmd
+        };
+
         match cmd {
             GuardCommand::Attach => {
-                // Coalesce back-to-back attach requests; stop if a detach is queued next.
-                attach_all(&mut injection, &mut load_logged_err);
+                retries_left = if attach_all(&mut injection, &mut load_logged_err) {
+                    0
+                } else {
+                    MAX_ATTACH_RETRIES
+                };
             }
             GuardCommand::Detach(done) => {
+                retries_left = 0;
                 detach_all(&mut injection);
                 load_logged_err = false;
                 let _ = done.send(());
@@ -178,10 +205,10 @@ fn run_worker(rx: mpsc::Receiver<GuardCommand>) {
     }
 }
 
-fn attach_all(injection: &mut Option<Injection>, load_logged_err: &mut bool) {
+fn attach_all(injection: &mut Option<Injection>, load_logged_err: &mut bool) -> bool {
     let handles = taskbar_windows();
     if handles.is_empty() {
-        return;
+        return false;
     }
 
     if injection.is_none() {
@@ -192,18 +219,19 @@ fn attach_all(injection: &mut Option<Injection>, load_logged_err: &mut bool) {
                     *load_logged_err = true;
                     log::warn!("Taskbar guard unavailable: {err}");
                 }
-                return;
+                return false;
             }
         }
     }
 
     let Some(inj) = injection.as_mut() else {
-        return;
+        return false;
     };
     inj.prune_dead();
 
     let pid = std::process::id() as usize;
     let msg = Messages::get().attach;
+    let mut all_attached = true;
     for hwnd in handles {
         match inj.track(hwnd) {
             Ok(true) => {
@@ -212,14 +240,17 @@ fn attach_all(injection: &mut Option<Injection>, load_logged_err: &mut bool) {
                         "Taskbar window 0x{hwnd:x} did not acknowledge taskbar guard attach"
                     );
                     inj.forget(hwnd);
+                    all_attached = false;
                 }
             }
             Ok(false) => {}
             Err(err) => {
                 log::warn!("Failed to hook taskbar window 0x{hwnd:x}: {err}");
+                all_attached = false;
             }
         }
     }
+    all_attached
 }
 
 fn detach_all(injection: &mut Option<Injection>) {

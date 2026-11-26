@@ -10,12 +10,19 @@
 //! detaches itself on the very next `WM_WINDOWPOSCHANGING` if Seelen exits or crashes, so the
 //! native taskbar can never remain stuck hidden.
 
-use std::{cell::RefCell, collections::HashMap, panic::AssertUnwindSafe, sync::OnceLock};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    mem::size_of,
+    panic::AssertUnwindSafe,
+    sync::OnceLock,
+};
 
 use slu_ipc::taskbar_guard::{ATTACH_MESSAGE, DETACH_MESSAGE};
 use windows::{
     Win32::{
         Foundation::{HANDLE, HMODULE, HWND, LPARAM, LRESULT, WAIT_TIMEOUT, WPARAM},
+        Graphics::Dwm::{DWMWA_CLOAK, DwmSetWindowAttribute},
         System::{
             LibraryLoader::{
                 GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN,
@@ -28,13 +35,15 @@ use windows::{
             WindowsAndMessaging::{
                 CWPSTRUCT, CallNextHookEx, GetClassNameW, GetPropW, IsWindowVisible,
                 RegisterWindowMessageW, RemovePropW, SET_WINDOW_POS_FLAGS, SWP_HIDEWINDOW,
-                SWP_SHOWWINDOW, SetPropW, WINDOWPOS, WM_NCDESTROY, WM_WINDOWPOSCHANGING,
+                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSENDCHANGING, SWP_NOSIZE, SWP_NOZORDER,
+                SWP_SHOWWINDOW, SetPropW, SetWindowPos, WINDOWPOS, WM_ACTIVATE, WM_NCDESTROY,
+                WM_SHOWWINDOW, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING,
             },
         },
     },
     core::{HSTRING, PCWSTR, w},
 };
-use windows_core::Owned;
+use windows_core::{BOOL, Owned};
 
 const SUBCLASS_ID: usize = 0x5EE1_0C02;
 const TASKBAR_CLASSES: [&str; 2] = ["Shell_TrayWnd", "Shell_SecondaryTrayWnd"];
@@ -44,6 +53,8 @@ const OWNER_PROP: PCWSTR = w!("SeelenUI.TaskbarGuard.Owner");
 thread_local! {
     /// Handle (`PROCESS_SYNCHRONIZE`) to the Seelen UI process that attached each taskbar window.
     static OWNERS: RefCell<HashMap<isize, Owned<HANDLE>>> = RefCell::new(HashMap::new());
+    /// Re-entrancy guard around `hide_now` so a follow-up hide cannot recurse.
+    static IN_HIDE: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Hook procedure installed by Seelen UI on the native taskbar threads.
@@ -130,6 +141,7 @@ fn attach(hwnd: HWND, owner_pid: usize) {
     unsafe {
         let _ = SetPropW(hwnd, OWNER_PROP, Some(HANDLE(detach_entry as *mut _)));
     }
+    hide_now(hwnd);
 }
 
 fn detach(hwnd: HWND) {
@@ -140,6 +152,7 @@ fn detach(hwnd: HWND) {
         let _ = RemoveWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID);
         let _ = RemovePropW(hwnd, OWNER_PROP);
     }
+    set_cloaked(hwnd, false);
 }
 
 /// Detach entry point stored in `OWNER_PROP`, called by newer copies of this DLL.
@@ -182,6 +195,44 @@ fn is_owner_alive(hwnd: HWND) -> bool {
     })
 }
 
+fn set_cloaked(hwnd: HWND, cloaked: bool) {
+    let value = BOOL::from(cloaked);
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAK,
+            (&raw const value).cast(),
+            size_of::<BOOL>() as u32,
+        );
+    }
+}
+
+fn hide_now(hwnd: HWND) {
+    set_cloaked(hwnd, true);
+    if IN_HIDE.with(|in_hide| in_hide.replace(true)) {
+        return;
+    }
+    if unsafe { IsWindowVisible(hwnd) }.as_bool() {
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_HIDEWINDOW
+                    | SWP_NOMOVE
+                    | SWP_NOSIZE
+                    | SWP_NOZORDER
+                    | SWP_NOACTIVATE
+                    | SWP_NOSENDCHANGING,
+            );
+        }
+    }
+    IN_HIDE.with(|in_hide| in_hide.set(false));
+}
+
 fn suppress_show_flags(flags: SET_WINDOW_POS_FLAGS, is_visible: bool) -> SET_WINDOW_POS_FLAGS {
     if flags.contains(SWP_SHOWWINDOW) || is_visible {
         (flags & !SWP_SHOWWINDOW) | SWP_HIDEWINDOW
@@ -210,7 +261,31 @@ unsafe extern "system" fn subclass_proc(
                 let is_visible = unsafe { IsWindowVisible(hwnd) }.as_bool();
                 pos.flags = suppress_show_flags(pos.flags, is_visible);
             }
+            guard(|| set_cloaked(hwnd, true));
             return result;
+        }
+        WM_WINDOWPOSCHANGED => {
+            if !is_owner_alive(hwnd) {
+                guard(|| detach(hwnd));
+                return unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+            }
+            let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+            guard(|| hide_now(hwnd));
+            return result;
+        }
+        WM_SHOWWINDOW if wparam.0 != 0 => {
+            if !is_owner_alive(hwnd) {
+                guard(|| detach(hwnd));
+                return unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+            }
+            let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+            guard(|| hide_now(hwnd));
+            return result;
+        }
+        WM_ACTIVATE => {
+            if !is_owner_alive(hwnd) {
+                guard(|| detach(hwnd));
+            }
         }
         WM_NCDESTROY => {
             guard(|| detach(hwnd));
