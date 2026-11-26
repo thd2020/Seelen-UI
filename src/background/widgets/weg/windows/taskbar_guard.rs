@@ -13,7 +13,10 @@ use std::{
     time::Duration,
 };
 
-use slu_ipc::taskbar_guard::{ATTACH_MESSAGE, DETACH_MESSAGE, HOOK_PROC};
+use slu_ipc::{
+    messages::SvcAction,
+    taskbar_guard::{ATTACH_MESSAGE, DETACH_MESSAGE, HOOK_PROC},
+};
 use slu_utils::checksums::calculate_sha256;
 use windows::{
     Win32::{
@@ -29,7 +32,12 @@ use windows::{
 };
 use windows_core::Owned;
 
-use crate::{error::Result, utils::constants::SEELEN_COMMON, windows_api::WindowsApi};
+use crate::{
+    cli::ServicePipe,
+    error::{Result, ResultLogExt},
+    utils::constants::SEELEN_COMMON,
+    windows_api::WindowsApi,
+};
 
 const DLL_NAME: &str = "sluhk.dll";
 const DLL_FOLDER: &str = "taskbar-guard";
@@ -47,11 +55,6 @@ static GUARD_TX: LazyLock<mpsc::Sender<GuardCommand>> = LazyLock::new(|| {
         .expect("Failed to spawn Taskbar Guard worker");
     tx
 });
-
-enum GuardCommand {
-    Attach,
-    Detach(mpsc::Sender<()>),
-}
 
 /// The component loaded in Seelen (for hooking) and the hooked taskbar threads.
 struct Injection {
@@ -141,6 +144,11 @@ struct HookedThread {
     windows: HashSet<isize>,
 }
 
+enum GuardCommand {
+    Attach,
+    Detach(mpsc::Sender<bool>),
+}
+
 /// Registered messages shared with `sluhk.dll`.
 struct Messages {
     attach: u32,
@@ -172,10 +180,18 @@ pub fn attach_taskbar_guard() {
 }
 
 /// Detaches the in-process taskbar guard from all native taskbar windows synchronously.
-pub fn detach_taskbar_guard() {
+///
+/// Returns an error if any taskbar window fails to acknowledge detach within the timeout; the
+/// background worker continues retrying and restores the native taskbar once detached.
+pub fn detach_taskbar_guard() -> Result<()> {
     let (tx, rx) = mpsc::channel();
-    if GUARD_TX.send(GuardCommand::Detach(tx)).is_ok() {
-        let _ = rx.recv();
+    GUARD_TX
+        .send(GuardCommand::Detach(tx))
+        .map_err(|_| "Taskbar guard worker is not running")?;
+    match rx.recv() {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("Timed out waiting for native taskbar guard to detach".into()),
+        Err(_) => Err("Taskbar guard worker stopped before confirming detach".into()),
     }
 }
 
@@ -208,6 +224,7 @@ fn run_worker(rx: mpsc::Receiver<GuardCommand>) {
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if detach_pass(&mut injection) {
                         retry = RetryState::None;
+                        ServicePipe::request(SvcAction::RestoreNativeTaskbar).log_error();
                     }
                     continue;
                 }
@@ -224,13 +241,14 @@ fn run_worker(rx: mpsc::Receiver<GuardCommand>) {
                 };
             }
             GuardCommand::Detach(done) => {
-                retry = if detach_all(&mut injection) {
+                let detached = detach_all(&mut injection);
+                retry = if detached {
                     RetryState::None
                 } else {
                     RetryState::Detach
                 };
                 load_logged_err = false;
-                let _ = done.send(());
+                let _ = done.send(detached);
             }
         }
     }

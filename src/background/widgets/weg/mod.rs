@@ -39,7 +39,7 @@ impl SeelenWeg {
 
     pub fn restore_native_taskbar() -> Result<()> {
         #[cfg(windows)]
-        imp::detach_taskbar_guard();
+        imp::detach_taskbar_guard()?;
         ServicePipe::request(SvcAction::RestoreNativeTaskbar)
     }
 
