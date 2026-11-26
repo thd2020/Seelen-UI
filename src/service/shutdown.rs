@@ -300,7 +300,13 @@ pub fn restore_native_taskbar() -> Result<()> {
     {
         return Ok(());
     }
-    HIDE_SIGNAL.1.notify_one();
+    {
+        let _guard = HIDE_SIGNAL
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        HIDE_SIGNAL.1.notify_one();
+    }
 
     for hwnd in get_taskbars_handles()? {
         AppBarData::from_handle(hwnd).set_state(AppBarDataState::AlwaysOnTop);

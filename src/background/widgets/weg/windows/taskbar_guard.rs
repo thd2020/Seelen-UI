@@ -8,7 +8,7 @@ use std::{
     io::{Read, Write},
     os::windows::{fs::OpenOptionsExt, io::AsRawHandle},
     path::{Path, PathBuf},
-    sync::{LazyLock, mpsc},
+    sync::{LazyLock, OnceLock, mpsc},
     thread,
     time::Duration,
 };
@@ -47,14 +47,7 @@ const ATTACH_RETRY_DELAY: Duration = Duration::from_secs(1);
 const MAX_DETACH_ATTEMPTS: u32 = 5;
 const DETACH_RETRY_DELAY: Duration = Duration::from_millis(300);
 
-static GUARD_TX: LazyLock<mpsc::Sender<GuardCommand>> = LazyLock::new(|| {
-    let (tx, rx) = mpsc::channel();
-    thread::Builder::new()
-        .name("Taskbar Guard".to_string())
-        .spawn(move || run_worker(rx))
-        .expect("Failed to spawn Taskbar Guard worker");
-    tx
-});
+static GUARD_TX: OnceLock<mpsc::Sender<GuardCommand>> = OnceLock::new();
 
 /// The component loaded in Seelen (for hooking) and the hooked taskbar threads.
 struct Injection {
@@ -174,9 +167,20 @@ enum RetryState {
     Detach,
 }
 
+fn guard_tx() -> &'static mpsc::Sender<GuardCommand> {
+    GUARD_TX.get_or_init(|| {
+        let (tx, rx) = mpsc::channel();
+        thread::Builder::new()
+            .name("Taskbar Guard".to_string())
+            .spawn(move || run_worker(rx))
+            .expect("Failed to spawn Taskbar Guard worker");
+        tx
+    })
+}
+
 /// Attaches the in-process taskbar guard to all native taskbar windows asynchronously.
 pub fn attach_taskbar_guard() {
-    let _ = GUARD_TX.send(GuardCommand::Attach);
+    let _ = guard_tx().send(GuardCommand::Attach);
 }
 
 /// Detaches the in-process taskbar guard from all native taskbar windows synchronously.
@@ -184,8 +188,11 @@ pub fn attach_taskbar_guard() {
 /// Returns an error if any taskbar window fails to acknowledge detach within the timeout; the
 /// background worker continues retrying and restores the native taskbar once detached.
 pub fn detach_taskbar_guard() -> Result<()> {
+    let Some(guard_tx) = GUARD_TX.get() else {
+        return Ok(());
+    };
     let (tx, rx) = mpsc::channel();
-    GUARD_TX
+    guard_tx
         .send(GuardCommand::Detach(tx))
         .map_err(|_| "Taskbar guard worker is not running")?;
     match rx.recv() {
@@ -222,11 +229,18 @@ fn run_worker(rx: mpsc::Receiver<GuardCommand>) {
             RetryState::Detach => match rx.recv_timeout(ATTACH_RETRY_DELAY) {
                 Ok(cmd) => cmd,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if detach_pass(&mut injection) {
-                        retry = RetryState::None;
-                        ServicePipe::request(SvcAction::RestoreNativeTaskbar).log_error();
+                    if !detach_pass(&mut injection) {
+                        continue;
                     }
-                    continue;
+                    retry = RetryState::None;
+                    match rx.try_recv() {
+                        Ok(cmd) => cmd,
+                        Err(mpsc::TryRecvError::Empty) => {
+                            ServicePipe::request(SvcAction::RestoreNativeTaskbar).log_error();
+                            continue;
+                        }
+                        Err(mpsc::TryRecvError::Disconnected) => break,
+                    }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             },
@@ -315,31 +329,24 @@ fn detach_all(injection: &mut Option<Injection>) -> bool {
 }
 
 fn detach_pass(injection: &mut Option<Injection>) -> bool {
-    if let Some(inj) = injection.as_mut() {
-        inj.prune_dead();
-    }
+    let Some(inj) = injection.as_mut() else {
+        return true;
+    };
+    inj.prune_dead();
     let mut targets: HashSet<isize> = taskbar_windows().into_iter().collect();
-    if let Some(inj) = injection.as_ref() {
-        targets.extend(inj.windows());
-    }
+    targets.extend(inj.windows());
     let msg = Messages::get().detach;
     let mut failed = false;
     for hwnd in targets {
         if !unsafe { IsWindow(Some(HWND(hwnd as _))) }.as_bool() {
-            if let Some(inj) = injection.as_mut() {
-                inj.forget(hwnd);
-            }
+            inj.forget(hwnd);
             continue;
         }
         if send(hwnd, msg, 0) {
-            if let Some(inj) = injection.as_mut() {
-                inj.forget(hwnd);
-            }
+            inj.forget(hwnd);
         } else {
             log::warn!("Taskbar window 0x{hwnd:x} did not acknowledge taskbar guard detach");
-            if let Some(inj) = injection.as_mut() {
-                let _ = inj.track(hwnd);
-            }
+            let _ = inj.track(hwnd);
             failed = true;
         }
     }
