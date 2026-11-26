@@ -4,19 +4,24 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    hash::{DefaultHasher, Hash, Hasher},
+    fs::{File, OpenOptions},
+    io::{Read, Write},
+    os::windows::{fs::OpenOptionsExt, io::AsRawHandle},
     path::{Path, PathBuf},
     sync::{LazyLock, mpsc},
+    thread,
     time::Duration,
 };
 
 use slu_ipc::taskbar_guard::{ATTACH_MESSAGE, DETACH_MESSAGE, HOOK_PROC};
+use slu_utils::checksums::calculate_sha256;
 use windows::{
     Win32::{
-        Foundation::{HMODULE, HWND, LPARAM, LRESULT, WPARAM},
+        Foundation::{HANDLE, HMODULE, HWND, LPARAM, LRESULT, WPARAM},
+        Storage::FileSystem::{FILE_SHARE_READ, GetFinalPathNameByHandleW, VOLUME_NAME_DOS},
         System::LibraryLoader::{GetProcAddress, LoadLibraryW},
         UI::WindowsAndMessaging::{
-            FindWindowExW, HHOOK, HOOKPROC, IsWindow, RegisterWindowMessageW, SMTO_ABORTIFHUNG,
+            FindWindowExW, HHOOK, HOOKPROC, IsWindow, RegisterWindowMessageW, SMTO_NORMAL,
             SendMessageTimeoutW, SetWindowsHookExW, WH_CALLWNDPROC,
         },
     },
@@ -31,10 +36,12 @@ const DLL_FOLDER: &str = "taskbar-guard";
 const SEND_TIMEOUT_MS: u32 = 1500;
 const MAX_ATTACH_RETRIES: u32 = 5;
 const ATTACH_RETRY_DELAY: Duration = Duration::from_secs(1);
+const MAX_DETACH_ATTEMPTS: u32 = 5;
+const DETACH_RETRY_DELAY: Duration = Duration::from_millis(300);
 
 static GUARD_TX: LazyLock<mpsc::Sender<GuardCommand>> = LazyLock::new(|| {
     let (tx, rx) = mpsc::channel();
-    std::thread::Builder::new()
+    thread::Builder::new()
         .name("Taskbar Guard".to_string())
         .spawn(move || run_worker(rx))
         .expect("Failed to spawn Taskbar Guard worker");
@@ -48,15 +55,16 @@ enum GuardCommand {
 
 /// The component loaded in Seelen (for hooking) and the hooked taskbar threads.
 struct Injection {
-    /// Dropped first: unhooking before the module is freed.
+    /// Dropped first: unhooking before the module is freed and the DLL file lock released.
     threads: HashMap<u32, HookedThread>,
     hook_proc: HOOKPROC,
     module: Owned<HMODULE>,
+    _locked_file: File,
 }
 
 impl Injection {
     fn load() -> Result<Self> {
-        let path = prepare_dll()?;
+        let (path, locked_file) = prepare_dll()?;
         let module = unsafe { Owned::new(LoadLibraryW(&HSTRING::from(path.as_os_str()))?) };
         let name = std::ffi::CString::new(HOOK_PROC).map_err(|_| "invalid hook procedure name")?;
         let proc = unsafe { GetProcAddress(*module, PCSTR(name.as_ptr() as _)) }
@@ -73,6 +81,7 @@ impl Injection {
             threads: HashMap::new(),
             hook_proc,
             module,
+            _locked_file: locked_file,
         })
     }
 
@@ -150,6 +159,13 @@ impl Messages {
     }
 }
 
+#[derive(Clone, Copy)]
+enum RetryState {
+    None,
+    Attach(u32),
+    Detach,
+}
+
 /// Attaches the in-process taskbar guard to all native taskbar windows asynchronously.
 pub fn attach_taskbar_guard() {
     let _ = GUARD_TX.send(GuardCommand::Attach);
@@ -166,38 +182,53 @@ pub fn detach_taskbar_guard() {
 fn run_worker(rx: mpsc::Receiver<GuardCommand>) {
     let mut injection: Option<Injection> = None;
     let mut load_logged_err = false;
-    let mut retries_left = 0u32;
+    let mut retry = RetryState::None;
     loop {
-        let cmd = if retries_left > 0 {
-            match rx.recv_timeout(ATTACH_RETRY_DELAY) {
+        let cmd = match retry {
+            RetryState::None => {
+                let Ok(cmd) = rx.recv() else {
+                    break;
+                };
+                cmd
+            }
+            RetryState::Attach(left) => match rx.recv_timeout(ATTACH_RETRY_DELAY) {
                 Ok(cmd) => cmd,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    retries_left -= 1;
-                    if attach_all(&mut injection, &mut load_logged_err) {
-                        retries_left = 0;
+                    retry = if attach_all(&mut injection, &mut load_logged_err) || left <= 1 {
+                        RetryState::None
+                    } else {
+                        RetryState::Attach(left - 1)
+                    };
+                    continue;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            },
+            RetryState::Detach => match rx.recv_timeout(ATTACH_RETRY_DELAY) {
+                Ok(cmd) => cmd,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if detach_pass(&mut injection) {
+                        retry = RetryState::None;
                     }
                     continue;
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            }
-        } else {
-            let Ok(cmd) = rx.recv() else {
-                break;
-            };
-            cmd
+            },
         };
 
         match cmd {
             GuardCommand::Attach => {
-                retries_left = if attach_all(&mut injection, &mut load_logged_err) {
-                    0
+                retry = if attach_all(&mut injection, &mut load_logged_err) {
+                    RetryState::None
                 } else {
-                    MAX_ATTACH_RETRIES
+                    RetryState::Attach(MAX_ATTACH_RETRIES)
                 };
             }
             GuardCommand::Detach(done) => {
-                retries_left = 0;
-                detach_all(&mut injection);
+                retry = if detach_all(&mut injection) {
+                    RetryState::None
+                } else {
+                    RetryState::Detach
+                };
                 load_logged_err = false;
                 let _ = done.send(());
             }
@@ -253,17 +284,52 @@ fn attach_all(injection: &mut Option<Injection>, load_logged_err: &mut bool) -> 
     all_attached
 }
 
-fn detach_all(injection: &mut Option<Injection>) {
+fn detach_all(injection: &mut Option<Injection>) -> bool {
+    for attempt in 0..MAX_DETACH_ATTEMPTS {
+        if detach_pass(injection) {
+            return true;
+        }
+        if attempt + 1 < MAX_DETACH_ATTEMPTS {
+            thread::sleep(DETACH_RETRY_DELAY);
+        }
+    }
+    false
+}
+
+fn detach_pass(injection: &mut Option<Injection>) -> bool {
+    if let Some(inj) = injection.as_mut() {
+        inj.prune_dead();
+    }
     let mut targets: HashSet<isize> = taskbar_windows().into_iter().collect();
     if let Some(inj) = injection.as_ref() {
         targets.extend(inj.windows());
     }
     let msg = Messages::get().detach;
+    let mut failed = false;
     for hwnd in targets {
-        send(hwnd, msg, 0);
+        if !unsafe { IsWindow(Some(HWND(hwnd as _))) }.as_bool() {
+            if let Some(inj) = injection.as_mut() {
+                inj.forget(hwnd);
+            }
+            continue;
+        }
+        if send(hwnd, msg, 0) {
+            if let Some(inj) = injection.as_mut() {
+                inj.forget(hwnd);
+            }
+        } else {
+            log::warn!("Taskbar window 0x{hwnd:x} did not acknowledge taskbar guard detach");
+            if let Some(inj) = injection.as_mut() {
+                let _ = inj.track(hwnd);
+            }
+            failed = true;
+        }
     }
-    // Unhook and free after sending detach so the hook handles the detach message first.
-    *injection = None;
+    if !failed {
+        // Only unhook and free once every live target has removed its subclass.
+        *injection = None;
+    }
+    !failed
 }
 
 fn taskbar_windows() -> Vec<isize> {
@@ -288,7 +354,7 @@ fn send(hwnd: isize, message: u32, wparam: usize) -> bool {
             message,
             WPARAM(wparam),
             LPARAM(0),
-            SMTO_ABORTIFHUNG,
+            SMTO_NORMAL,
             SEND_TIMEOUT_MS,
             None,
         )
@@ -296,7 +362,7 @@ fn send(hwnd: isize, message: u32, wparam: usize) -> bool {
     taken.0 != 0
 }
 
-fn prepare_dll() -> Result<PathBuf> {
+fn prepare_dll() -> Result<(PathBuf, File)> {
     let exe = std::env::current_exe()?;
     let source = exe
         .parent()
@@ -306,18 +372,92 @@ fn prepare_dll() -> Result<PathBuf> {
         return Err(format!("DLL not found at {}", source.display()).into());
     }
     let content = std::fs::read(&source)?;
-    let mut hasher = DefaultHasher::new();
-    content.hash(&mut hasher);
-    let file_name = format!("sluhk-{:016x}.dll", hasher.finish());
+    let hash = calculate_sha256(&content);
+    let primary_name = format!("sluhk-{hash}.dll");
 
     let dir = SEELEN_COMMON.app_temp_dir().join(DLL_FOLDER);
     std::fs::create_dir_all(&dir)?;
-    let target = dir.join(&file_name);
-    if !target.exists() {
-        std::fs::write(&target, content)?;
+    let primary = dir.join(&primary_name);
+
+    if let Some(locked) = open_verified_dll(&primary, &content) {
+        let resolved = final_path(&locked)?;
+        remove_old_copies(&dir, &primary_name);
+        return Ok((resolved, locked));
     }
-    remove_old_copies(&dir, &file_name);
-    Ok(target)
+
+    let _ = std::fs::remove_file(&primary);
+    if write_exclusive(&primary, &content).is_ok()
+        && let Some(locked) = open_verified_dll(&primary, &content)
+    {
+        let resolved = final_path(&locked)?;
+        remove_old_copies(&dir, &primary_name);
+        return Ok((resolved, locked));
+    }
+
+    // If the cached path was planted or locked, fall back to a process-unique name before
+    // sharing the file for read-only DLL loading.
+    let pid = std::process::id();
+    for idx in 0u32..8 {
+        let name = format!("sluhk-{hash}-{pid}-{idx}.dll");
+        let candidate = dir.join(&name);
+        if write_exclusive(&candidate, &content).is_ok()
+            && let Some(locked) = open_verified_dll(&candidate, &content)
+        {
+            let resolved = final_path(&locked)?;
+            remove_old_copies(&dir, &name);
+            return Ok((resolved, locked));
+        }
+    }
+
+    Err(format!(
+        "Failed to stage verified taskbar guard DLL in {}",
+        dir.display()
+    )
+    .into())
+}
+
+fn write_exclusive(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .share_mode(0)
+        .open(path)?;
+    file.write_all(content)?;
+    file.sync_all()
+}
+
+/// Opens `path` with `FILE_SHARE_READ` (blocking writes, deletes, and renames while held) and
+/// confirms the handle's exact bytes match `expected`.
+fn open_verified_dll(path: &Path, expected: &[u8]) -> Option<File> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ.0)
+        .open(path)
+        .ok()?;
+    let mut actual = Vec::with_capacity(expected.len());
+    file.read_to_end(&mut actual).ok()?;
+    (actual == expected).then_some(file)
+}
+
+fn final_path(file: &File) -> Result<PathBuf> {
+    let mut buf = vec![0u16; 512];
+    loop {
+        let len = unsafe {
+            GetFinalPathNameByHandleW(HANDLE(file.as_raw_handle()), &mut buf, VOLUME_NAME_DOS)
+        } as usize;
+        if len == 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        if len < buf.len() {
+            let text = String::from_utf16_lossy(&buf[..len]);
+            let normalized = text
+                .strip_prefix(r"\\?\")
+                .filter(|rest| rest.as_bytes().get(1) == Some(&b':'))
+                .unwrap_or(&text);
+            return Ok(PathBuf::from(normalized));
+        }
+        buf.resize(len + 1, 0);
+    }
 }
 
 fn remove_old_copies(dir: &Path, keep: &str) {
@@ -329,5 +469,60 @@ fn remove_old_copies(dir: &Path, keep: &str) {
         if name != keep && name.starts_with("sluhk-") && name.ends_with(".dll") {
             let _ = std::fs::remove_file(entry.path());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(label: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "seelen-taskbar-guard-{label}-{}-{nanos}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).expect("create temp dir");
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn verified_dll_is_locked_against_writes_while_held() {
+        let dir = TempDir::new("lock");
+        let path = dir.0.join("sluhk-test.dll");
+        let bytes = b"valid-sluhk-payload";
+        write_exclusive(&path, bytes).expect("write exclusive");
+
+        let locked = open_verified_dll(&path, bytes).expect("matching cached DLL opens");
+        assert!(
+            OpenOptions::new().write(true).open(&path).is_err(),
+            "writes must be blocked while the verified read-shared handle is held"
+        );
+        drop(locked);
+        assert!(OpenOptions::new().write(true).open(&path).is_ok());
+    }
+
+    #[test]
+    fn tampered_cached_dll_is_rejected() {
+        let dir = TempDir::new("tampered");
+        let path = dir.0.join("sluhk-test.dll");
+        write_exclusive(&path, b"planted-bytes").expect("write planted");
+
+        assert!(open_verified_dll(&path, b"expected-bytes").is_none());
     }
 }

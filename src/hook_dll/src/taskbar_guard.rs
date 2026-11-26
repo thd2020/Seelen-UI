@@ -33,22 +33,20 @@ use windows::{
         UI::{
             Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
             WindowsAndMessaging::{
-                CWPSTRUCT, CallNextHookEx, GetClassNameW, GetPropW, IsWindowVisible,
-                RegisterWindowMessageW, RemovePropW, SET_WINDOW_POS_FLAGS, SWP_HIDEWINDOW,
-                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSENDCHANGING, SWP_NOSIZE, SWP_NOZORDER,
-                SWP_SHOWWINDOW, SetPropW, SetWindowPos, WINDOWPOS, WM_ACTIVATE, WM_NCDESTROY,
-                WM_SHOWWINDOW, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING,
+                CWPSTRUCT, CallNextHookEx, GetClassNameW, IsWindowVisible, RegisterWindowMessageW,
+                SET_WINDOW_POS_FLAGS, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
+                SWP_NOSENDCHANGING, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SendMessageW,
+                SetWindowPos, WINDOWPOS, WM_ACTIVATE, WM_NCDESTROY, WM_SHOWWINDOW,
+                WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING,
             },
         },
     },
-    core::{HSTRING, PCWSTR, w},
+    core::{HSTRING, PCWSTR},
 };
 use windows_core::{BOOL, Owned};
 
 const SUBCLASS_ID: usize = 0x5EE1_0C02;
 const TASKBAR_CLASSES: [&str; 2] = ["Shell_TrayWnd", "Shell_SecondaryTrayWnd"];
-/// Window property holding the detach function of the copy of this DLL attached to the window.
-const OWNER_PROP: PCWSTR = w!("SeelenUI.TaskbarGuard.Owner");
 
 thread_local! {
     /// Handle (`PROCESS_SYNCHRONIZE`) to the Seelen UI process that attached each taskbar window.
@@ -69,14 +67,11 @@ pub unsafe extern "system" fn TaskbarGuardCallWndProc(
 ) -> LRESULT {
     if code >= 0 {
         // SAFETY: for WH_CALLWNDPROC, lParam points to a CWPSTRUCT when code >= 0.
-        if let Some(msg) = unsafe { (lparam.0 as *const CWPSTRUCT).as_ref() } {
-            if msg.message == attach_message() {
-                let (hwnd, owner_pid) = (msg.hwnd, msg.wParam.0);
-                guard(|| attach(hwnd, owner_pid));
-            } else if msg.message == detach_message() {
-                let hwnd = msg.hwnd;
-                guard(|| detach(hwnd));
-            }
+        if let Some(msg) = unsafe { (lparam.0 as *const CWPSTRUCT).as_ref() }
+            && msg.message == attach_message()
+        {
+            let (hwnd, owner_pid) = (msg.hwnd, msg.wParam.0);
+            guard(|| attach(hwnd, owner_pid));
         }
     }
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
@@ -117,9 +112,6 @@ fn attach(hwnd: HWND, owner_pid: usize) {
         return;
     }
 
-    pin_this_module();
-    take_over(hwnd);
-
     let Ok(raw_owner) = (unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }) else {
         return;
     };
@@ -127,6 +119,9 @@ fn attach(hwnd: HWND, owner_pid: usize) {
     if unsafe { WaitForSingleObject(*owner, 0) } != WAIT_TIMEOUT {
         return;
     }
+
+    pin_this_module();
+    take_over(hwnd);
 
     OWNERS.with_borrow_mut(|owners| {
         owners.insert(hwnd.0 as isize, owner);
@@ -138,9 +133,6 @@ fn attach(hwnd: HWND, owner_pid: usize) {
         });
         return;
     }
-    unsafe {
-        let _ = SetPropW(hwnd, OWNER_PROP, Some(HANDLE(detach_entry as *mut _)));
-    }
     hide_now(hwnd);
 }
 
@@ -150,25 +142,15 @@ fn detach(hwnd: HWND) {
     });
     unsafe {
         let _ = RemoveWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID);
-        let _ = RemovePropW(hwnd, OWNER_PROP);
     }
     set_cloaked(hwnd, false);
 }
 
-/// Detach entry point stored in `OWNER_PROP`, called by newer copies of this DLL.
-extern "system" fn detach_entry(hwnd: HWND) {
-    guard(|| detach(hwnd));
-}
-
-/// Detaches an older copy of this DLL (from another Seelen build) attached to `hwnd`.
+/// Detaches any previously attached copy of this DLL via its own subclass handler without relying
+/// on raw function pointers in window properties.
 fn take_over(hwnd: HWND) {
-    let owner = unsafe { GetPropW(hwnd, OWNER_PROP) };
-    let ours = detach_entry as *mut core::ffi::c_void;
-    if !owner.is_invalid() && owner.0 != ours {
-        // SAFETY: the property is only ever set by a copy of this DLL to its `detach_entry`, and
-        // copies pin themselves, so the function is still loaded.
-        let theirs: extern "system" fn(HWND) = unsafe { std::mem::transmute(owner.0) };
-        theirs(hwnd);
+    unsafe {
+        let _ = SendMessageW(hwnd, detach_message(), Some(WPARAM(0)), Some(LPARAM(0)));
     }
 }
 
@@ -250,6 +232,11 @@ unsafe extern "system" fn subclass_proc(
     _data: usize,
 ) -> LRESULT {
     match msg {
+        m if m == detach_message() => {
+            let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+            guard(|| detach(hwnd));
+            return result;
+        }
         WM_WINDOWPOSCHANGING => {
             if !is_owner_alive(hwnd) {
                 guard(|| detach(hwnd));
